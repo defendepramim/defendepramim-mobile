@@ -1,0 +1,101 @@
+================================================================================
+SNAPSHOT DO PROJETO: GOLEIRO DE ALUGUEL (FLUTTER + FIREBASE)
+Data de Atualização: 14/04/2026
+================================================================================
+
+1. ESTRUTURA DO BANCO DE DADOS (FIRESTORE)
+------------------------------------------
+
+COLEÇÃO: jogos
+- status: (String) ['aberto', 'fechado', 'contestado', 'analise_suporte', 'finalizado', 'cancelado']
+- dataHora: (Timestamp) Data e hora do início da partida.
+- valor: (Double) Valor do cache do goleiro.
+- idGoleiro: (String) UID do goleiro escalado.
+- local: (String) Nome da arena/campo.
+- motivoContestacao: (String) Motivo enviado pelo contratante.
+- detalhesContestacao: (String) Detalhes da reclamação do contratante.
+- replicaGoleiro: (String) Defesa enviada pelo goleiro.
+- replicaEm: (Timestamp) Quando a defesa foi enviada.
+
+COLEÇÃO: usuarios
+- multasPendentes: (Double) Valor total de multas a pagar.
+- qtdDesistencias: (Int) Contador de desistências para ranking.
+- tipo: (String) ['goleiro', 'contratante', 'admin']
+
+------------------------------------------
+
+2. MÁQUINA DE ESTADOS (STATUS DO JOGO)
+------------------------------------------
+
+- ABERTO: Vaga disponível. Qualquer goleiro pode aceitar.
+- FECHADO: Goleiro escalado. Partida confirmada na agenda.
+- CONTESTADO: O contratante abriu uma queixa pós-jogo (ex: falta).
+- ANALISE_SUPORTE: O goleiro já respondeu à contestação. Aguarda decisão do Admin.
+- FINALIZADO: Jogo concluído com sucesso. Cache liberado/pago.
+- CANCELADO: Jogo que não ocorreu (WO ou cancelamento prévio).
+
+------------------------------------------
+
+3. REGRAS DE NEGÓCIO E LÓGICA CENTRAL
+------------------------------------------
+
+REGRA DE DESISTÊNCIA:
+- Se faltar menos de 4 horas para o início (dataHora):
+    * Aplica multa automática de R$ 10,00 no perfil do goleiro.
+    * Registra a multa no sub-extrato do utilizador.
+- Em qualquer desistência:
+    * O jogo volta ao status 'aberto'.
+    * Os campos idGoleiro, nomeGoleiro e fotoGoleiro são apagados do documento.
+
+SISTEMA DE DISPUTA:
+- Contratante contesta -> Status muda para 'contestado'.
+- Goleiro responde (Réplica) -> Status muda para 'analise_suporte'.
+- O dinheiro do cache fica bloqueado até a decisão manual do suporte/admin.
+
+------------------------------------------
+
+4. IDENTIDADE VISUAL E UI (PADRÕES)
+------------------------------------------
+
+- Cor Primária (Sucesso): 0xFF00E676 (Verde Neon)
+- Cor Alerta/Erro: Colors.redAccent
+- Cor de Fundo: Colors.black / 0xFF1A1A1A (Dark Mode)
+- Ícones de Status:
+    * Confirmado: Icons.check_circle_outline
+    * Contestado: Icons.warning_amber_rounded
+    * Em Análise: Icons.rule
+    * Concluído: Icons.verified_rounded
+
+------------------------------------------
+Snapshot gerado para facilitar a continuidade do desenvolvimento.
+================================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

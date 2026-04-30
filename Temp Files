@@ -1,0 +1,433 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:mask_text_input_formatter/mask_text_input_formatter.dart';
+
+class TelaCadastro extends StatefulWidget {
+  const TelaCadastro({super.key});
+
+  @override
+  State<TelaCadastro> createState() => _TelaCadastroState();
+}
+
+class _TelaCadastroState extends State<TelaCadastro> {
+  final _formKey = GlobalKey<FormState>();
+  
+  // Controllers
+  final _nomeController = TextEditingController();
+  final _cpfController = TextEditingController();
+  final _telefoneController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _senhaController = TextEditingController();
+  final _confirmarSenhaController = TextEditingController();
+
+  // FocusNodes
+  final _nomeFocus = FocusNode();
+  final _cpfFocus = FocusNode();
+  final _telFocus = FocusNode();
+  final _emailFocus = FocusNode();
+  final _senhaFocus = FocusNode();
+  final _confSenhaFocus = FocusNode();
+
+  // Estados
+  String? _tipoUsuario;
+  bool _maiorDe16 = false;
+  bool _aceitouTermos = false;
+  bool _obscureSenha = true;
+  bool _obscureConfirmar = true;
+  bool _carregando = false;
+  String? _erroGeral;
+
+  final _cpfMask = MaskTextInputFormatter(mask: '###.###.###-##', filter: {"#": RegExp(r'[0-9]')});
+  final _telMask = MaskTextInputFormatter(mask: '(##) #####-####', filter: {"#": RegExp(r'[0-9]')});
+
+  @override
+  void initState() {
+    super.initState();
+    _nomeFocus.addListener(() => setState(() {}));
+    _cpfFocus.addListener(() => setState(() {}));
+    _telFocus.addListener(() => setState(() {}));
+    _emailFocus.addListener(() => setState(() {}));
+    _senhaFocus.addListener(() => setState(() {}));
+    _confSenhaFocus.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _nomeFocus.dispose(); _cpfFocus.dispose(); _telFocus.dispose();
+    _emailFocus.dispose(); _senhaFocus.dispose(); _confSenhaFocus.dispose();
+    _nomeController.dispose(); _cpfController.dispose(); _telefoneController.dispose();
+    _emailController.dispose(); _senhaController.dispose(); _confirmarSenhaController.dispose();
+    super.dispose();
+  }
+
+  bool _validarCPF(String cpf) {
+    String limpo = cpf.replaceAll(RegExp(r'[^0-9]'), '');
+    if (limpo.length != 11) return false;
+    if (RegExp(r'^(\d)\1*$').hasMatch(limpo)) return false;
+    return true; 
+  }
+
+  void _setErro(String? msg) => setState(() => _erroGeral = msg);
+
+  void _mostrarTermos() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text("Termos de Uso", style: TextStyle(color: Colors.white)),
+        content: const Text(
+          "Seus dados serão usados para conectar goleiros e contratantes no DefendePraMim. O app não se responsabiliza por incidentes nos jogos.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCELAR")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+            onPressed: () {
+              setState(() => _aceitouTermos = true);
+              Navigator.pop(context);
+            }, 
+            child: const Text("ACEITAR", style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _registrar() async {
+  _setErro(null);
+
+  // 1. Validações iniciais (Formulário e Checkboxes)
+  if (!_formKey.currentState!.validate()) {
+    _setErro("Corrija os campos marcados em vermelho.");
+    return;
+  }
+
+    // Validação extra de segurança para as senhas
+    if (_senhaController.text != _confirmarSenhaController.text) {
+      _setErro("As senhas digitadas são diferentes.");
+      return;
+    }
+  if (_tipoUsuario == null) {
+    _setErro("Selecione se você é Goleiro ou Contratante.");
+    return;
+  }
+  if (!_maiorDe16 || !_aceitouTermos) {
+    _setErro("Você precisa aceitar os termos e ter mais de 16 anos.");
+    return;
+  }
+
+  setState(() => _carregando = true);
+
+  try {
+    // 2. Cria o usuário no Firebase Auth (E-mail e Senha)
+    final userCred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      email: _emailController.text.trim(),
+      password: _senhaController.text.trim(),
+    );
+
+    // 3. Salva os dados detalhados no Firestore
+    // O 'saldo': 0.0 garante que o app não quebre ao tentar ler o dinheiro do usuário
+    await FirebaseFirestore.instance.collection('usuarios').doc(userCred.user!.uid).set({
+      'uid': userCred.user!.uid,
+      'nome': _nomeController.text.trim(),
+      'cpf': _cpfController.text.trim(),
+      'telefone': _telefoneController.text.trim(),
+      'email': _emailController.text.trim(),
+      'tipoPerfil': _tipoUsuario, // 'goleiro' ou 'contratante'
+      'saldo': 0.0,               // <--- O Saldo inicial que faltava!
+      'ativo': true,
+      'criadoEm': FieldValue.serverTimestamp(),
+    });
+
+    // 4. NAVEGAÇÃO FINAL (A parte que evita a tela preta e limpa a pilha)
+    if (mounted) {
+      // Isso fecha a tela de cadastro e volta para a raiz do app. 
+      // O seu AuthWrapper vai detectar que o cara tá logado e vai jogar ele pra Home sozinho.
+      Navigator.of(context).popUntil((route) => route.isFirst); 
+    }
+
+  } on FirebaseAuthException catch (e) {
+    if (e.code == 'email-already-in-use') {
+      _setErro("Este e-mail já está cadastrado.");
+    } else if (e.code == 'weak-password') {
+      _setErro("Senha muito fraca (mínimo 6 caracteres).");
+    } else {
+      _setErro("Erro: ${e.message}");
+    }
+  } catch (e) {
+    _setErro("Erro ao salvar dados. Verifique sua conexão.");
+    debugPrint("ERRO_CADASTRO: $e");
+  } finally {
+    if (mounted) setState(() => _carregando = false);
+  }
+}
+
+  @override
+  Widget build(BuildContext context) {
+    const primaryColor = Color(0xFF00E676);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text("Crie sua conta!", style: TextStyle(fontWeight: FontWeight.bold)), 
+        centerTitle: true, 
+        backgroundColor: Colors.black, 
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context), // Agora funciona pois o Login está "atrás"
+        ),
+      ),
+      
+      
+      
+      body: SingleChildScrollView(
+
+        
+        padding: const EdgeInsets.all(24),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeader("Escolha seu perfil"),
+              const SizedBox(height: 16),
+              _buildSeletorPerfil(primaryColor),
+              const SizedBox(height: 32),
+              
+              _buildHeader("Informações Pessoais"),
+              const SizedBox(height: 16),
+              
+              _input(
+                controller: _nomeController, 
+                focusNode: _nomeFocus,
+                label: "Nome Completo", 
+                icon: Icons.person_outline, 
+                validator: (v) {
+                  if (v == null || v.isEmpty) return "Campo obrigatório";
+                  if (_nomeFocus.hasFocus && v.trim().length < 4) return null;
+                  return v.trim().split(' ').length < 2 ? "Digite nome e sobrenome" : null;
+                }
+              ),
+              
+              Row(children: [
+                Expanded(child: _input(
+                  controller: _cpfController, 
+                  focusNode: _cpfFocus,
+                  label: "CPF", 
+                  icon: Icons.badge_outlined, 
+                  mask: _cpfMask, 
+                  keyboard: TextInputType.number, 
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return "Obrigatório";
+                    if (_cpfFocus.hasFocus && v.length < 14) return null;
+                    return !_validarCPF(v) ? "CPF Inválido" : null;
+                  }
+                )),
+                const SizedBox(width: 12),
+                Expanded(child: _input(
+                  controller: _telefoneController, 
+                  focusNode: _telFocus,
+                  label: "WhatsApp", 
+                  icon: Icons.phone_android, 
+                  mask: _telMask, 
+                  keyboard: TextInputType.phone,
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return "Obrigatório";
+                    if (_telFocus.hasFocus && v.length < 15) return null;
+                    return v.length < 15 ? "Incompleto" : null;
+                  }
+                )),
+              ]),
+
+              _input(
+                controller: _emailController, 
+                focusNode: _emailFocus,
+                label: "E-mail", 
+                icon: Icons.email_outlined, 
+                keyboard: TextInputType.emailAddress,
+                validator: (v) {
+                  if (v == null || v.isEmpty) return "E-mail obrigatório";
+                  if (!_emailFocus.hasFocus) {
+                     if (!v.contains("@") || !v.contains(".")) return "E-mail inválido";
+                  }
+                  return null;
+                }
+              ),
+              
+_input(
+                controller: _senhaController, 
+                focusNode: _senhaFocus,
+                label: "Senha (mín. 6 dígitos)", 
+                icon: Icons.lock_outline, 
+                obscure: _obscureSenha,
+                validator: (v) => (v != null && v.length < 6) ? "Mínimo 6 dígitos" : null,
+                suffix: IconButton(
+                  icon: Icon(_obscureSenha ? Icons.visibility : Icons.visibility_off, color: Colors.white54), 
+                  onPressed: () => setState(() => _obscureSenha = !_obscureSenha)
+                )
+              ),
+
+              // CAMPO CONFIRMAR SENHA
+              _input(
+                controller: _confirmarSenhaController, 
+                focusNode: _confSenhaFocus,
+                label: "Confirme a Senha", 
+                icon: Icons.lock_reset, 
+                obscure: _obscureConfirmar, // <--- Usa a nova variável
+                validator: (v) {
+                  if (v == null || v.isEmpty) return "Confirmação obrigatória";
+                  if (v != _senhaController.text) return "As senhas não conferem";
+                  return null;
+                },
+                suffix: IconButton(
+                  icon: Icon(_obscureConfirmar ? Icons.visibility : Icons.visibility_off, color: Colors.white54), 
+                  onPressed: () => setState(() => _obscureConfirmar = !_obscureConfirmar)
+                )
+              ),
+
+              _buildCheckboxes(primaryColor),
+              
+              // WIDGET DE ERRO QUE APARECE DINAMICAMENTE
+              if (_erroGeral != null) _buildErroWidget(),
+              
+              const SizedBox(height: 30),
+              _buildBotaoFinalizar(primaryColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- MÉTODOS DE UI (IGUAIS AO ANTERIOR, MAS COM PEQUENOS AJUSTES) ---
+
+  Widget _input({required TextEditingController controller, required FocusNode focusNode, required String label, required IconData icon, bool obscure = false, Widget? suffix, dynamic mask, TextInputType keyboard = TextInputType.text, String? Function(String?)? validator}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextFormField(
+        controller: controller,
+        focusNode: focusNode,
+        obscureText: obscure,
+        keyboardType: keyboard,
+        inputFormatters: mask != null ? [mask] : [],
+        validator: validator,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        style: const TextStyle(color: Colors.white, fontSize: 15),
+        onTapOutside: (_) => focusNode.unfocus(),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Colors.white54, fontSize: 14),
+          prefixIcon: Icon(icon, color: const Color(0xFF00E676), size: 22),
+          suffixIcon: suffix,
+          filled: true,
+          fillColor: Colors.white.withOpacity(0.05),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          errorStyle: const TextStyle(color: Colors.redAccent),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(String title) => Text(title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 1.2));
+
+  Widget _buildSeletorPerfil(Color color) {
+    return Row(
+      children: [
+        _cardPerfil("GOLEIRO", "goleiro", Icons.sports_soccer, color),
+        const SizedBox(width: 16),
+        _cardPerfil("CONTRATANTE", "contratante", Icons.groups, color),
+      ],
+    );
+  }
+
+  Widget _cardPerfil(String label, String value, IconData icon, Color color) {
+    bool isSelected = _tipoUsuario == value;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _tipoUsuario = value),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          decoration: BoxDecoration(
+            color: isSelected ? color.withOpacity(0.1) : Colors.white.withOpacity(0.05),
+            border: Border.all(color: isSelected ? color : Colors.transparent, width: 2),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: [
+              Icon(icon, color: isSelected ? color : Colors.white38, size: 30),
+              const SizedBox(height: 8),
+              Text(label, style: TextStyle(color: isSelected ? color : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCheckboxes(Color color) {
+    return Column(
+      children: [
+        CheckboxListTile(
+          value: _maiorDe16,
+          onChanged: (v) => setState(() {
+            _maiorDe16 = v!;
+            if (_maiorDe16) _erroGeral = null; // Limpa o erro ao marcar
+          }),
+          title: const Text("Tenho mais de 16 anos", style: TextStyle(color: Colors.white70, fontSize: 13)),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          activeColor: color,
+        ),
+        CheckboxListTile(
+          value: _aceitouTermos,
+          onChanged: (v) {
+            if (v == true && !_aceitouTermos) _mostrarTermos();
+            else setState(() {
+               _aceitouTermos = v!;
+               if (_aceitouTermos) _erroGeral = null;
+            });
+          },
+          title: InkWell(
+            onTap: () => _mostrarTermos(),
+            child: Text("Aceito os Termos de Uso", style: TextStyle(color: color, fontSize: 13, decoration: TextDecoration.underline, fontWeight: FontWeight.bold)),
+          ),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          activeColor: color,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildErroWidget() {
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.redAccent.withOpacity(0.3))),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, color: Colors.redAccent, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(_erroGeral!, style: const TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w500))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBotaoFinalizar(Color color) {
+    return SizedBox(
+      height: 55,
+      child: ElevatedButton(
+        onPressed: _carregando ? null : _registrar,
+        style: ElevatedButton.styleFrom(backgroundColor: color, disabledBackgroundColor: color.withOpacity(0.3), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        child: _carregando 
+          ? const SizedBox(width: 25, height: 25, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2)) 
+          : const Text("FINALIZAR CADASTRO", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, letterSpacing: 1.1)),
+      ),
+    );
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "82107967572",
+    "project_id": "defendepramim-633b0",
+    "storage_bucket": "defendepramim-633b0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:82107967572:android:b36d688aca3e15829265c1",
+        "android_client_info": {
+          "package_name": "com.example.defendepramim"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDGPzoBTIjzik60-sASsJWE-NiccPv2gVc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
