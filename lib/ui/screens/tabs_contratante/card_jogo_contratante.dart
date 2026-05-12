@@ -387,36 +387,44 @@ Future<Map<String, dynamic>?> _dialogConfirmarCancelamento(double multa, double 
 }
 
 void _mostrarOpcoes() {
-    final dt = (widget.jogo['dataHora'] as Timestamp).toDate();
-    final agora = _obterHoraRealAgora(); // MUDANÇA AQUI
-    final status = widget.jogo['status'];
+  final dt = (widget.jogo['dataHora'] as Timestamp).toDate();
+  final duracao = widget.jogo['duracao'] ?? 60;
+  final fimPartida = dt.add(Duration(minutes: duracao));
+  final agora = _obterHoraRealAgora();
+  
+  final bool jaIniciou = agora.isAfter(dt);
+  final bool jaTerminou = agora.isAfter(fimPartida);
+  final status = widget.jogo['status'];
 
-    // Se o jogo já finalizou, foi cancelado ou está em disputa, não abre menu de edição
-    if (['finalizado', 'cancelado', 'contestado'].contains(status)) return;
+  if (['finalizado', 'cancelado', 'contestado'].contains(status)) return;
 
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 10),
-          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10))),
-          const SizedBox(height: 15),
-          
-          if (agora.isBefore(dt))
-            ListTile(
-              leading: const Icon(Icons.edit, color: Colors.blue),
-              title: const Text("Editar Detalhes", style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (context) => TelaCriarJogo(dados: widget.jogo), 
-                  fullscreenDialog: true
-                ));
-              },
-            ),
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: const Color(0xFF1E1E1E),
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (context) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 10),
+        Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10))),
+        const SizedBox(height: 15),
+        
+        // SÓ EDITA SE NÃO TIVER INICIADO
+        if (!jaIniciou)
+          ListTile(
+            leading: const Icon(Icons.edit, color: Colors.blue),
+            title: const Text("Editar Detalhes", style: TextStyle(color: Colors.white)),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(
+                builder: (context) => TelaCriarJogo(dados: widget.jogo), 
+                fullscreenDialog: true
+              ));
+            },
+          ),
+
+        // SÓ CANCELA SE NÃO TIVER TERMINADO
+        if (!jaTerminou)
           ListTile(
             leading: const Icon(Icons.cancel, color: Colors.redAccent),
             title: const Text("Cancelar Partida", style: TextStyle(color: Colors.white)),
@@ -425,11 +433,23 @@ void _mostrarOpcoes() {
               _cancelarPartida();
             },
           ),
-          const SizedBox(height: 30),
-        ],
-      ),
-    );
-  }
+        
+        // AVISO CASO JÁ TENHA TERMINADO
+        if (jaTerminou)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            child: Text(
+              "Esta partida já foi encerrada. Utilize as ações no card principal.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+          ),
+
+        const SizedBox(height: 30),
+      ],
+    ),
+  );
+}
 
 @override
 Widget build(BuildContext context) {
@@ -437,12 +457,10 @@ Widget build(BuildContext context) {
   final dt = (widget.jogo['dataHora'] as Timestamp).toDate();
   final duracao = widget.jogo['duracao'] ?? 60;
   
-  // 1. Cálculos de Tempo
   final fimPartida = dt.add(Duration(minutes: duracao));
   final agora = _obterHoraRealAgora();
   final bool jaTerminou = agora.isAfter(fimPartida);
   
-  // O limite é 12h após o FIM
   final limitePagamento = fimPartida.add(const Duration(hours: 12));
   final restante = limitePagamento.difference(agora);
   final bool expirouPrazo = restante.isNegative;
@@ -452,12 +470,13 @@ Widget build(BuildContext context) {
     decoration: BoxDecoration(
       color: const Color(0xFF1A1A1A), 
       borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: Colors.white.withOpacity(0.05))
+      border: Border.all(color: expirouPrazo && status == 'fechado' ? Colors.redAccent.withOpacity(0.3) : Colors.white.withOpacity(0.05))
     ),
     child: ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
-        onTap: (status == 'aberto' || status == 'fechado') ? _mostrarOpcoes : null,
+        // Desativa o menu se já tiver terminado ou status for final, pois agora as ações são via botões no card
+        onTap: (status == 'aberto' || (status == 'fechado' && !jaTerminou)) ? _mostrarOpcoes : null,
         child: Column(
           children: [
             Padding(
@@ -494,34 +513,39 @@ Widget build(BuildContext context) {
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 20)
                       ),
                       const SizedBox(height: 6),
-                      _buildStatusBadge(status),
+                      _buildStatusBadge(status, jaTerminou, expirouPrazo),
                     ],
                   ),
                 ],
               ),
             ),
 
-            // --- 🚨 BANNER DE ALERTA (12 HORAS) ---
-            if (jaTerminou && status == 'fechado' && !expirouPrazo)
+            // BANNER DE ALERTA ATUALIZADO
+            if (jaTerminou && status == 'fechado')
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                color: Colors.orangeAccent.withOpacity(0.1),
+                color: (expirouPrazo ? Colors.redAccent : Colors.orangeAccent).withOpacity(0.1),
                 child: Row(
                   children: [
-                    const Icon(Icons.timer_outlined, color: Colors.orangeAccent, size: 16),
+                    Icon(expirouPrazo ? Icons.error_outline : Icons.timer_outlined, 
+                         color: expirouPrazo ? Colors.redAccent : Colors.orangeAccent, size: 16),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        "Ação necessária: O pagamento será liberado automaticamente em ${restante.inHours}h ${restante.inMinutes % 60}m.",
-                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                        expirouPrazo 
+                          ? "O prazo expirou! Libere o pagamento para o goleiro."
+                          : "Ação necessária: O pagamento será liberado em ${restante.inHours}h ${restante.inMinutes % 60}m.",
+                        style: TextStyle(
+                          color: expirouPrazo ? Colors.redAccent : Colors.orangeAccent, 
+                          fontSize: 11, fontWeight: FontWeight.bold
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
 
-            // Botoões ou status de processamento
             if (jaTerminou && status == 'fechado') _buildBotoesAcao(expirouPrazo),
             
             if (_isLoading) 
@@ -533,48 +557,74 @@ Widget build(BuildContext context) {
   );
 }
 
-  Widget _buildStatusBadge(String status) {
-    String label = status.toUpperCase();
-    Color color = Colors.grey;
+Widget _buildStatusBadge(String status, bool jaTerminou, bool expirou) {
+  String label = status.toUpperCase();
+  Color color = Colors.grey;
 
-    if (status == 'contestado') {
-      final contestacao = widget.jogo['contestacao'];
-      final sub = contestacao is Map ? contestacao['statusMediacao'] : null;
-      label = sub == 'aguardando_goleiro' ? "EM DISPUTA (ANÁLISE)" : "EM MEDIAÇÃO";
-      color = Colors.redAccent;
-    } else {
-      switch (status) {
-        case 'aberto': color = Colors.orangeAccent; label = "BUSCANDO GOLEIRO"; break;
-        case 'fechado': color = const Color(0xFF00E676); label = "CONFIRMADO"; break;
-        case 'finalizado': color = Colors.blueAccent; label = "PAGO"; break;
-        case 'cancelado': color = Colors.white24; label = "CANCELADO"; break;
-      }
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: color.withOpacity(0.5)),
-      ),
-      child: Text(label, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800)),
-    );
+  // No seu método que desenha o badge de status
+  if (status == 'finalizado' && widget.jogo['finalizadoAutomaticamente'] == true) {
+    label = "FINALIZADO (SISTEMA)";
+    color = Colors.blueGrey;
   }
 
-  Widget _buildBotoesAcao(bool expirou) {
-  // Se o prazo de 12h venceu, não deixa mais contestar nem clicar
+  if (status == 'fechado' && jaTerminou) {
+    label = expirou ? "PAGAMENTO PENDENTE" : "AGUARDANDO FINALIZAÇÃO";
+    color = expirou ? Colors.redAccent : Colors.orangeAccent;
+  } else if (status == 'contestado') {
+    label = "EM DISPUTA";
+    color = Colors.redAccent;
+  } else {
+    switch (status) {
+      case 'aberto': color = Colors.orangeAccent; label = "BUSCANDO GOLEIRO"; break;
+      case 'fechado': color = const Color(0xFF00E676); label = "CONFIRMADO"; break;
+      case 'finalizado': color = Colors.blueAccent; label = "PAGO"; break;
+      case 'cancelado': color = Colors.white24; label = "CANCELADO"; break;
+    }
+  }
+
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: color.withOpacity(0.1),
+      borderRadius: BorderRadius.circular(30),
+      border: Border.all(color: color.withOpacity(0.5)),
+    ),
+    child: Text(label, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w800)),
+  );
+}
+
+Widget _buildBotoesAcao(bool expirou) {
+  // Se o prazo de 12h venceu, removemos a CONTESTAÇÃO, 
+  // mas mantemos o PAGAMENTO como saída de emergência manual.
   if (expirou) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 15),
-      alignment: Alignment.center,
-      child: const Text(
-        "AGUARDANDO PROCESSAMENTO DO PAGAMENTO",
-        style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      child: Column(
+        children: [
+          const Text(
+            "PRAZO DE CONTESTAÇÃO ENCERRADO",
+            style: TextStyle(color: Colors.redAccent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              onPressed: _confirmarPagamentoDialog,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E676),
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text("LIBERAR PAGAMENTO", style: TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ],
       ),
     );
   }
 
+  // Layout normal com os dois botões (antes das 12h)
   return Container(
     padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
     child: Row(
@@ -604,7 +654,6 @@ Widget build(BuildContext context) {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF00E676),
                 foregroundColor: Colors.black,
-                elevation: 0,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: const Text("LIBERAR PAGAMENTO", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11)),

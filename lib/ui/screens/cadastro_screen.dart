@@ -170,14 +170,21 @@ class _TelaCadastroState extends State<TelaCadastro> {
         title: _buildStepIndicator(primaryNeon),
         centerTitle: true,
       ),
-      body: PageView(
-        controller: _pageController,
-        physics: const NeverScrollableScrollPhysics(),
-        children: [
-          _buildEtapa1(primaryNeon),
-          _buildEtapa2(primaryNeon),
-        ],
-      ),
+      body: 
+      
+      PageView(
+  controller: _pageController,
+  onPageChanged: (index) {
+    setState(() {
+      _paginaAtual = index;
+    });
+  },
+  children: [
+    _buildEtapa1(primaryNeon),
+    _buildEtapa2(primaryNeon),
+  ],
+)
+      
     );
   }
 

@@ -92,44 +92,66 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     );
   }
 
-  Future<void> _processarAceite(BuildContext context, String idJogo) async {
+// --- 🛡️ PROCESSO DE ACEITE REVISADO ---
+
+Future<void> _processarAceite(BuildContext context, String idJogo) async {
     final String? uidGoleiro = FirebaseAuth.instance.currentUser?.uid;
     if (uidGoleiro == null) return;
 
+    // Inicia o carregamento
     setState(() => _jogoProcessando = idJogo);
 
     try {
+      final snapNovo = await FirebaseFirestore.instance.collection('jogos').doc(idJogo).get();
+      if (!snapNovo.exists) throw "Este jogo não existe mais.";
+      
+      final dadosNovo = snapNovo.data() as Map<String, dynamic>;
+      final DateTime inicioNovo = (dadosNovo['dataHora'] as Timestamp).toDate();
+      final int duracaoMinNovo = (dadosNovo['duracao'] ?? 60).toInt(); 
+      final DateTime fimNovo = inicioNovo.add(Duration(minutes: duracaoMinNovo));
+      final String localNovo = (dadosNovo['local'] ?? '').toString().trim();
+
+      // Busca conflitos no dia
+      final DateTime inicioDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 0, 0, 0);
+      final DateTime fimDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 23, 59, 59);
+
+      final conflitosQuery = await FirebaseFirestore.instance
+          .collection('jogos')
+          .where('idGoleiro', isEqualTo: uidGoleiro)
+          .where('status', isEqualTo: 'fechado')
+          .where('dataHora', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDoDia))
+          .where('dataHora', isLessThanOrEqualTo: Timestamp.fromDate(fimDoDia))
+          .get();
+
+      for (var doc in conflitosQuery.docs) {
+        final dadosEx = doc.data();
+        final DateTime inicioEx = (dadosEx['dataHora'] as Timestamp).toDate();
+        final int duracaoEx = (dadosEx['duracao'] ?? 60).toInt();
+        final String localEx = (dadosEx['local'] ?? '').toString().trim();
+
+        DateTime fimExCalculado = inicioEx.add(Duration(minutes: duracaoEx));
+        bool precisaDeslocamento = localEx.toLowerCase() != localNovo.toLowerCase();
+        
+        if (precisaDeslocamento) {
+          fimExCalculado = fimExCalculado.add(const Duration(minutes: 30));
+        }
+
+        bool conflito = inicioNovo.isBefore(fimExCalculado) && fimNovo.isAfter(inicioEx);
+
+        if (conflito) {
+          throw precisaDeslocamento 
+              ? "Você já tem um jogo em '$localEx'. É necessário 30min de deslocamento." 
+              : "Você já tem outro jogo no mesmo horário em '$localEx'.";
+        }
+      }
+
+      // Transação de gravação
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         DocumentReference jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
-        DocumentSnapshot snapNovoJogo = await transaction.get(jogoRef);
+        DocumentSnapshot snapTransacao = await transaction.get(jogoRef);
 
-        if (!snapNovoJogo.exists || snapNovoJogo.get('status') != 'aberto') {
-          throw Exception("Putz! Outro goleiro foi mais rápido e pegou esta pelada.");
-        }
-
-        final dadosNovo = snapNovoJogo.data() as Map<String, dynamic>;
-        final DateTime inicioNovo = (dadosNovo['dataHora'] as Timestamp).toDate();
-        final int duracaoHoras = dadosNovo['duracao'] ?? 1;
-        final DateTime fimNovo = inicioNovo.add(Duration(hours: duracaoHoras));
-
-        if (inicioNovo.isBefore(_obterHoraRealAgora())) {
-           throw Exception("O horário de início desta pelada já passou.");
-        }
-
-        final jogosAgendadosQuery = await FirebaseFirestore.instance
-            .collection('jogos')
-            .where('idGoleiro', isEqualTo: uidGoleiro)
-            .where('status', isEqualTo: 'fechado')
-            .get();
-
-        for (var doc in jogosAgendadosQuery.docs) {
-          final DateTime inicioExistente = (doc['dataHora'] as Timestamp).toDate();
-          final int duracaoEx = doc['duracao'] ?? 1;
-          final DateTime fimExistente = inicioExistente.add(Duration(hours: duracaoEx));
-
-          if (inicioNovo.isBefore(fimExistente) && fimNovo.isAfter(inicioExistente)) {
-            throw Exception("Conflito de agenda! Você já tem jogo às ${inicioExistente.hour}:${inicioExistente.minute.toString().padLeft(2, '0')}.");
-          }
+        if (!snapTransacao.exists || snapTransacao.get('status') != 'aberto') {
+          throw "A vaga foi preenchida por outro goleiro enquanto você confirmava.";
         }
 
         transaction.update(jogoRef, {
@@ -140,52 +162,91 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
       });
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Colors.green, content: Text("🧤 Pelada confirmada com sucesso!")));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(backgroundColor: Colors.green, content: Text("🧤 Pelada confirmada com sucesso!"))
+        );
       }
-} catch (e) {
+
+    } catch (e) {
       if (context.mounted) {
-        String mensagem = e.toString().replaceAll("Exception: ", "");
+        String erroMsg = e.toString().replaceAll("Exception: ", "");
         
-        // Se a mensagem for a de "Outro goleiro", podemos dar um destaque especial
-        if (mensagem.contains("Outro goleiro")) {
-          _showAvisoVagaPreenchida(context);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: Colors.redAccent, 
-              content: Text("❌ $mensagem"),
-              behavior: SnackBarBehavior.floating,
-            )
-          );
-        }
+        // Define o estilo do alerta baseado no erro
+        bool isConflito = erroMsg.contains("horário") || erroMsg.contains("deslocamento");
+
+        _showAlertaCustom(
+          context,
+          titulo: isConflito ? "Conflito de Horário" : "Ops!",
+          mensagem: erroMsg,
+          icone: isConflito ? Icons.event_busy : Icons.error_outline,
+          corDestaque: isConflito ? Colors.orangeAccent : const Color(0xFF00E676),
+        );
       }
     } finally {
-      if (mounted) setState(() => _jogoProcessando = null);
+      // ESTA LINHA É CRUCIAL: Ela destrava o botão independente de dar certo ou errado
+      if (mounted) {
+        setState(() => _jogoProcessando = null);
+      }
     }
   }
 
-  // --- 💡 UI EXTRA: AVISO DE VAGA PREENCHIDA ---
-  void _showAvisoVagaPreenchida(BuildContext context) {
+// --- 🎨 UI DE ALERTA "BUNITINNN" ---
+void _showAlertaCustom(
+    BuildContext context, {
+    required String titulo,
+    required String mensagem,
+    IconData icone = Icons.warning_amber_rounded,
+    Color corDestaque = const Color(0xFF00E676),
+  }) {
+    // Usamos o Root Navigator para garantir que o diálogo apareça sobre tudo
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Vaga Preenchida! 🧤", style: TextStyle(color: Colors.white)),
-        content: const Text(
-          "Putz! Outro goleiro foi mais rápido e confirmou a presença primeiro.\n\nNão desanime, logo aparece outra pelada!",
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text("OK, ENTENDI", style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold)),
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+            side: BorderSide(color: Colors.white.withOpacity(0.05)),
           ),
-        ],
+          title: Row(
+            children: [
+              Icon(icone, color: corDestaque, size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(titulo, 
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            mensagem,
+            style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.5),
+          ),
+          actions: [
+            SizedBox(
+              width: double.infinity,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: corDestaque.withOpacity(0.1),
+                    foregroundColor: corDestaque,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+                  ),
+                  child: const Text("ENTENDI", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
-
   @override
   Widget build(BuildContext context) {
     final String? uidGoleiro = FirebaseAuth.instance.currentUser?.uid;

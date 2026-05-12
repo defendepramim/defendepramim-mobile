@@ -78,16 +78,16 @@ class InitialScreen extends StatelessWidget {
               const SizedBox(height: 20),
 
               /// ➖ DIVIDER (Visual para separar o Social)
-              Row(
-                children: [
-                  Expanded(child: Divider(color: Colors.grey.withOpacity(0.3))),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 10),
-                    child: Text("OU", style: TextStyle(color: Colors.grey, fontSize: 12)),
-                  ),
-                  Expanded(child: Divider(color: Colors.grey.withOpacity(0.3))),
-                ],
-              ),
+Row(
+  children: [
+    Expanded(child: Divider(color: Colors.grey.withValues(alpha: 0.3))), // Alterado aqui
+    const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 10),
+      child: Text("OU", style: TextStyle(color: Colors.grey, fontSize: 12)),
+    ),
+    Expanded(child: Divider(color: Colors.grey.withValues(alpha: 0.3))), // Alterado aqui
+  ],
+),
 
               const SizedBox(height: 20),
 
@@ -99,28 +99,28 @@ class InitialScreen extends StatelessWidget {
                   onPressed: null, // Mantém nulo para ficar desabilitado
                   style: OutlinedButton.styleFrom(
                     // Cor da borda quando o botão está habilitado
-                    side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                   ).copyWith(
                     // Aqui resolvemos o erro: definimos a borda para o estado desabilitado
                     side: WidgetStateProperty.resolveWith<BorderSide?>(
                       (Set<WidgetState> states) {
                         if (states.contains(WidgetState.disabled)) {
-                          return BorderSide(color: Colors.white.withOpacity(0.05)); // Borda bem clarinha se desativado
+                          return BorderSide(color: Colors.white.withValues(alpha: 0.05)); // Borda bem clarinha se desativado
                         }
-                        return BorderSide(color: Colors.white.withOpacity(0.2)); // Borda padrão
+                        return BorderSide(color: Colors.white.withValues(alpha: 0.2)); // Borda padrão
                       },
                     ),
                   ),
                   icon: FaIcon(
                     FontAwesomeIcons.google, 
                     size: 18, 
-                    color: Colors.white.withOpacity(0.3) // Ícone opaco para parecer desativado
+                    color: Colors.white.withValues(alpha: 0.3), // O novo padrão do Flutter
                   ),
                   label: Text(
                     "CONTINUAR COM GOOGLE",
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.3), // Texto opaco
+                      color: Colors.white.withValues(alpha: 0.3), // O novo padrão do Flutter
                       fontWeight: FontWeight.w600
                     ),
                   ),

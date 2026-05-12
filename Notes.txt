@@ -1,101 +1,87 @@
+⚠️ AVISOS IMPORTANTES DE IMPLEMENTAÇÃO
+SCRIPT DE 12 HORAS (CRON JOB): A lógica de liberação automática de saldo foi escrita, mas precisa ser implantada 
+(deploy) e ativada via Firebase CLI. O pagamento/ativação do plano Blaze no Firebase é necessário para 
+o uso de Cloud Functions.
+
+API DE MAPAS (GOOGLE MAPS/PLACES): As funcionalidades de geolocalização e busca de endereços dependem da ativação 
+da API Key no Google Cloud Console com faturamento ativo. Até lá, use strings de texto para os locais.
+
 ================================================================================
+
 SNAPSHOT DO PROJETO: GOLEIRO DE ALUGUEL (FLUTTER + FIREBASE)
-Data de Atualização: 14/04/2026
+Data de Atualização: 12/05/2026
+Desenvolvedor: Mobile Developer (Flutter/Dart)
+
 ================================================================================
 
 1. ESTRUTURA DO BANCO DE DADOS (FIRESTORE)
-------------------------------------------
-
 COLEÇÃO: jogos
-- status: (String) ['aberto', 'fechado', 'contestado', 'analise_suporte', 'finalizado', 'cancelado']
-- dataHora: (Timestamp) Data e hora do início da partida.
-- valor: (Double) Valor do cache do goleiro.
-- idGoleiro: (String) UID do goleiro escalado.
-- local: (String) Nome da arena/campo.
-- motivoContestacao: (String) Motivo enviado pelo contratante.
-- detalhesContestacao: (String) Detalhes da reclamação do contratante.
-- replicaGoleiro: (String) Defesa enviada pelo goleiro.
-- replicaEm: (Timestamp) Quando a defesa foi enviada.
+id: (String) Identificador único do documento.
+
+status: (String) ['aberto', 'fechado', 'contestado', 'finalizado', 'cancelado'].
+
+dataHora: (Timestamp) Data e hora do início da partida.
+
+dataHoraFim: (Timestamp) (NOVO) Calculado com base na duração para controle do script de 12h.
+
+duracao: (Int) Tempo de jogo em minutos (ex: 60, 90).
+
+valor: (Double) Preço do jogo (travado no ato do agendamento).
+
+idContratante: (String) UID do usuário que criou a pelada.
+
+idGoleiro: (String) UID do goleiro que aceitou o jogo.
+
+local: (String) Nome da arena/campo.
+
+nivelGoleiro: (String) Requisito técnico (Ex: "Avançado").
 
 COLEÇÃO: usuarios
-- multasPendentes: (Double) Valor total de multas a pagar.
-- qtdDesistencias: (Int) Contador de desistências para ranking.
-- tipo: (String) ['goleiro', 'contratante', 'admin']
+saldo: (Double) Valor disponível para saque.
 
-------------------------------------------
+saldoTravado: (Double) Valores de jogos realizados que aguardam a janela de 12h.
 
-2. MÁQUINA DE ESTADOS (STATUS DO JOGO)
-------------------------------------------
+isGoleiro: (Boolean) Define se o perfil pode aceitar jogos.
 
-- ABERTO: Vaga disponível. Qualquer goleiro pode aceitar.
-- FECHADO: Goleiro escalado. Partida confirmada na agenda.
-- CONTESTADO: O contratante abriu uma queixa pós-jogo (ex: falta).
-- ANALISE_SUPORTE: O goleiro já respondeu à contestação. Aguarda decisão do Admin.
-- FINALIZADO: Jogo concluído com sucesso. Cache liberado/pago.
-- CANCELADO: Jogo que não ocorreu (WO ou cancelamento prévio).
-
-------------------------------------------
-
-3. REGRAS DE NEGÓCIO E LÓGICA CENTRAL
-------------------------------------------
-
-REGRA DE DESISTÊNCIA:
-- Se faltar menos de 4 horas para o início (dataHora):
-    * Aplica multa automática de R$ 10,00 no perfil do goleiro.
-    * Registra a multa no sub-extrato do utilizador.
-- Em qualquer desistência:
-    * O jogo volta ao status 'aberto'.
-    * Os campos idGoleiro, nomeGoleiro e fotoGoleiro são apagados do documento.
-
-SISTEMA DE DISPUTA:
-- Contratante contesta -> Status muda para 'contestado'.
-- Goleiro responde (Réplica) -> Status muda para 'analise_suporte'.
-- O dinheiro do cache fica bloqueado até a decisão manual do suporte/admin.
-
-------------------------------------------
-
-4. IDENTIDADE VISUAL E UI (PADRÕES)
-------------------------------------------
-
-- Cor Primária (Sucesso): 0xFF00E676 (Verde Neon)
-- Cor Alerta/Erro: Colors.redAccent
-- Cor de Fundo: Colors.black / 0xFF1A1A1A (Dark Mode)
-- Ícones de Status:
-    * Confirmado: Icons.check_circle_outline
-    * Contestado: Icons.warning_amber_rounded
-    * Em Análise: Icons.rule
-    * Concluído: Icons.verified_rounded
-
-------------------------------------------
-Snapshot gerado para facilitar a continuidade do desenvolvimento.
 ================================================================================
 
+2. FLUXO DE PAGAMENTO & SEGURANÇA (LOGICA ATUAL)
+Agendamento: O contratante paga e o valor sai do seu saldo (ou Pix) e entra no saldoTravado do Goleiro no momento em que o jogo é fechado (goleiro aceita).
 
+Janela de Segurança: O status do jogo permanece como fechado até o término da partida.
 
+Liberação Automática:
 
+O script (Cloud Function) monitora o campo dataHoraFim.
 
+Após 12 horas do fim, se não houver contestação, o status muda para finalizado.
 
+O valor migra de saldoTravado para saldo (disponível para saque).
 
+================================================================================
 
+3. ARQUITETURA DO APP (FLUTTER)
+Telas Principais (UI):
+aba_buscar_jogos.dart: Listagem de partidas disponíveis para goleiros.
 
+aba_carteira.dart: Gestão de saldo, exibição de valores travados e histórico.
 
+marcar_partida.dart: Formulário de criação de jogos com seletor de data, hora e duração.
 
+Componentes Técnicos:
+Dart & Flutter: Uso intensivo de WriteBatch para garantir que a reserva do dinheiro e a criação do jogo ocorram simultaneamente (atomicidade).
 
+Gerenciamento de Estado: Atualizações em tempo real com setState e integração direta com o SDK do Firebase.
 
+================================================================================
 
+4. STATUS DE INTEGRAÇÃO
+Firebase Auth: Operacional (UIDs vinculados).
 
+Cloud Firestore: Estrutura de coleções e subcoleções de extrato configurada.
 
+Cloud Functions: Código-base pronto para monitoramento de tempo, aguardando deploy.
 
+Google Maps API: Pendente ativação de faturamento/cotas.
 
-
-
-
-
-
-
-
-
-
-
-
-
+================================================================================

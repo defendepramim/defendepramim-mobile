@@ -86,27 +86,34 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
   // --- LÓGICA DE DADOS ---
 
-  void carregarDadosEdicao() {
-    setState(() {
-      localSelecionado = widget.dados!["local"] ?? "";
-      observacoes = widget.dados!["observacoes"] ?? "";
-      valorJogo = (widget.dados!["valor"] ?? 0.0).toDouble();
-      nivelGoleiro = widget.dados!["nivelGoleiro"] ?? "";
-      duracaoSelecionada = widget.dados!["duracao"] ?? 1;
+void carregarDadosEdicao() {
+  setState(() {
+    localSelecionado = widget.dados!["local"] ?? "";
+    observacoes = widget.dados!["observacoes"] ?? "";
+    valorJogo = (widget.dados!["valor"] ?? 0.0).toDouble();
+    nivelGoleiro = widget.dados!["nivelGoleiro"] ?? "";
 
-      final Timestamp? ts = widget.dados!["dataHora"];
-      if (ts != null) {
-        // O .toDate() já traz para o fuso horário correto do celular do usuário (RS)
-        final DateTime localDT = ts.toDate();
+    // AJUSTE AQUI: 
+    // Se o que vier do banco for <= 5, provavelmente é o formato antigo (horas).
+    // Se for > 5, já deve ser minutos. Se for nulo, usamos 60.
+    final dynamic durRaw = widget.dados!["duracao"];
+    if (durRaw == null) {
+      duracaoSelecionada = 60;
+    } else {
+      duracaoSelecionada = (durRaw is int && durRaw <= 5) ? durRaw * 60 : durRaw;
+    }
 
-        dataSelecionada = DateTime(localDT.year, localDT.month, localDT.day);
-        horarioSelecionado = TimeOfDay(
-          hour: localDT.hour,
-          minute: localDT.minute,
-        );
-      }
-    });
-  }
+    final Timestamp? ts = widget.dados!["dataHora"];
+    if (ts != null) {
+      final DateTime localDT = ts.toDate();
+      dataSelecionada = DateTime(localDT.year, localDT.month, localDT.day);
+      horarioSelecionado = TimeOfDay(
+        hour: localDT.hour,
+        minute: localDT.minute,
+      );
+    }
+  });
+}
 
   Future<DateTime> _obterHoraCertaServidor() async {
     try {
@@ -829,21 +836,24 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
 
-  Future<void> salvarNoFirebase(double saldoAntes) async {
-    try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid == null) return;
+Future<void> salvarNoFirebase(double saldoAntes) async {
+  try {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
 
-      setState(() => _processando = true);
+    setState(() => _processando = true);
 
-      // 1. Montagem da Data e Hora Final
-      final DateTime dataHoraFinal = DateTime(
-        dataSelecionada!.year,
-        dataSelecionada!.month,
-        dataSelecionada!.day,
-        horarioSelecionado!.hour,
-        horarioSelecionado!.minute,
-      );
+    // --- ALTERAÇÃO AQUI: Criar o ponto de início e de fim ---
+final DateTime dataHoraInicio = DateTime(
+      dataSelecionada!.year,
+      dataSelecionada!.month,
+      dataSelecionada!.day,
+      horarioSelecionado!.hour,
+      horarioSelecionado!.minute,
+    );
+
+    // Calcula o fim com base na duração (60, 90, 120 min...)
+    final DateTime dataHoraFim = dataHoraInicio.add(Duration(minutes: duracaoSelecionada));
 
       WriteBatch batch = FirebaseFirestore.instance.batch();
 
@@ -905,24 +915,21 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
       // 5. Salva/Atualiza os Dados do Jogo
       batch.set(jogoRef, {
-        "id": jogoRef.id,
-        "local": localSelecionado,
-        "dataHora": Timestamp.fromDate(dataHoraFinal),
-        "dataExibicao":
-            "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')}",
-        "horaExibicao":
-            "${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}",
-        "valor": valorJogo > 0
-            ? valorJogo
-            : (valorAntigo > 0 ? valorAntigo : 35.0),
-        "status": widget.dados?["status"] ?? "aberto",
-        "idContratante": uid,
-        "observacoes": observacoes,
-        "nivelGoleiro": nivelGoleiro,
-        "duracao": duracaoSelecionada,
-        "criadoEm": widget.dados?["criadoEm"] ?? FieldValue.serverTimestamp(),
-        "editadoEm": FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      "id": jogoRef.id,
+      "local": localSelecionado,
+      "dataHora": Timestamp.fromDate(dataHoraInicio), // Início
+      "dataHoraFim": Timestamp.fromDate(dataHoraFim), // <--- NOVO CAMPO PARA A CLOUD FUNCTION
+      "dataExibicao": "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')}",
+      "horaExibicao": "${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}",
+      "valor": valorJogo, 
+      "status": widget.dados?["status"] ?? "aberto",
+      "idContratante": uid,
+      "observacoes": observacoes,
+      "nivelGoleiro": nivelGoleiro,
+      "duracao": duracaoSelecionada,
+      "criadoEm": widget.dados?["criadoEm"] ?? FieldValue.serverTimestamp(),
+      "editadoEm": FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
 
       // Executa todas as operações de uma vez
       await batch.commit();
