@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:defendepramim/ui/widgets/modal_cadastro_pix.dart';
 
 class AbaCarteira extends StatelessWidget {
   const AbaCarteira({super.key});
@@ -23,13 +24,14 @@ class AbaCarteira extends StatelessWidget {
             .orderBy('data', descending: true)
             .snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.hasError)
+          if (snapshot.hasError) {
             return const Center(
               child: Text(
                 "Erro ao carregar",
                 style: TextStyle(color: Colors.white),
               ),
             );
+          }
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
               child: CircularProgressIndicator(color: primaryColor),
@@ -86,8 +88,9 @@ class AbaCarteira extends StatelessWidget {
               // 1. CARD PRINCIPAL
               _cardSaldoGoleiro(
                 context,
-                saldoDisponivelParaSaque,
-                primaryColor,
+                uid, 
+                saldoDisponivelParaSaque, 
+                primaryColor, 
               ),
 
               const SizedBox(height: 12),
@@ -156,13 +159,18 @@ class AbaCarteira extends StatelessWidget {
                   );
                 }
 
+                // Identifica se é saída
+                bool isSaida = tipo == 'saida';
+
                 return _buildItemHistoricoGoleiro(
-                  item['descricao'] ?? 'Partida',
+                  item['descricao'] ?? 'Transação',
                   data,
                   valor,
-                  status == 'contestado' ? Colors.orangeAccent : primaryColor,
-                  item['metodo'] ?? 'manual',
+                  status == 'contestado' 
+                      ? Colors.orangeAccent 
+                      : (isSaida ? Colors.redAccent : primaryColor),
                   status,
+                  isSaida,
                 );
               }).toList(),
             ],
@@ -174,7 +182,7 @@ class AbaCarteira extends StatelessWidget {
 
   // --- WIDGETS DE SUPORTE (FORA DO BUILD) ---
 
-  Widget _cardSaldoGoleiro(BuildContext context, double saldo, Color primary) {
+  Widget _cardSaldoGoleiro(BuildContext context, String uid, double saldo, Color primary) {
     bool temSaldo = saldo > 0;
 
     return Container(
@@ -182,7 +190,6 @@ class AbaCarteira extends StatelessWidget {
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
-        // CORES IGUAIS À DO CONTRATANTE
         gradient: LinearGradient(
           colors: [primary.withOpacity(0.2), Colors.white.withOpacity(0.05)],
           begin: Alignment.topLeft,
@@ -225,12 +232,7 @@ class AbaCarteira extends StatelessWidget {
             width: double.infinity,
             height: 50,
             child: ElevatedButton.icon(
-              // Só habilita o clique se tiver saldo
-              onPressed: temSaldo
-                  ? () {
-                      /* Sua lógica de saque aqui */
-                    }
-                  : null,
+              onPressed: temSaldo ? () => _iniciarFluxoSaque(context, uid, saldo, primary) : null,
               icon: Icon(
                 Icons.arrow_upward_rounded,
                 size: 20,
@@ -246,7 +248,6 @@ class AbaCarteira extends StatelessWidget {
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: primary,
-                // Cor quando o botão está desativado (sem saldo)
                 disabledBackgroundColor: Colors.white.withOpacity(0.05),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(15),
@@ -260,12 +261,253 @@ class AbaCarteira extends StatelessWidget {
     );
   }
 
-  Widget _cardStatusEspecial(
-    String titulo,
-    double valor,
-    IconData icone,
-    Color cor,
+  // --- LÓGICA DE SAQUE BLINDADA ---
+  
+  Future<void> _iniciarFluxoSaque(BuildContext context, String uid, double saldoDisponivel, Color primary) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+    );
+
+    try {
+      final snap = await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
+      final dados = snap.data() as Map<String, dynamic>?;
+
+      if (!context.mounted) return;
+      Navigator.pop(context); // Fecha o loading
+
+      final chavePix = dados?['chavePix'];
+      final tipoPix = dados?['tipoPix'];
+      final nomeGoleiro = dados?['nome'] ?? "Goleiro";
+
+      if (chavePix == null || chavePix.toString().trim().isEmpty) {
+        _mostrarAlertaPixAusente(context, primary);
+        return;
+      }
+
+      _abrirModalDigitacaoSaque(context, uid, nomeGoleiro, chavePix.toString(), tipoPix.toString(), saldoDisponivel, primary);
+
+    } catch (e) {
+      if (!context.mounted) return;
+      Navigator.pop(context); 
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erro ao verificar PIX: $e"), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  void _abrirModalDigitacaoSaque(
+    BuildContext context,
+    String uid,
+    String nomeGoleiro,
+    String chavePix,
+    String tipoPix,
+    double saldoMaximo,
+    Color primary,
   ) {
+    final TextEditingController valorController = TextEditingController();
+    bool processando = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setStateSB) {
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1E1E1E),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        "VALOR DO SAQUE",
+                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      )
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    "Disponível: R\$ ${saldoMaximo.toStringAsFixed(2)}\nPIX: $chavePix ($tipoPix)",
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: valorController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                    decoration: InputDecoration(
+                      prefixText: "R\$ ",
+                      prefixStyle: const TextStyle(color: Colors.white54, fontSize: 24),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      suffixIcon: TextButton(
+                        onPressed: () {
+                          setStateSB(() {
+                            valorController.text = saldoMaximo.toStringAsFixed(2);
+                          });
+                        },
+                        child: Text("TUDO", style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primary,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: processando
+                          ? null
+                          : () async {
+                              String textoValor = valorController.text.replaceAll(',', '.');
+                              double? valorSaque = double.tryParse(textoValor);
+
+                              if (valorSaque == null || valorSaque <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("Digite um valor válido!"), backgroundColor: Colors.redAccent),
+                                );
+                                return;
+                              }
+
+                              if (valorSaque > saldoMaximo) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("Saldo insuficiente para este valor."), backgroundColor: Colors.redAccent),
+                                );
+                                return;
+                              }
+
+                              setStateSB(() => processando = true);
+
+                              try {
+                                final userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
+                                final extratoRef = userRef.collection('extrato').doc();
+                                final saqueRef = FirebaseFirestore.instance.collection('saques').doc();
+
+                                await FirebaseFirestore.instance.runTransaction((transaction) async {
+                                  DocumentSnapshot userSnap = await transaction.get(userRef);
+                                  double saldoAtual = (userSnap.data() as Map<String, dynamic>?)?['saldo']?.toDouble() ?? 0.0;
+
+                                  if (saldoAtual < valorSaque) {
+                                    throw Exception("Saldo atualizado no servidor é insuficiente.");
+                                  }
+
+                                  double novoSaldo = saldoAtual - valorSaque;
+
+                                  transaction.update(userRef, {'saldo': novoSaldo});
+
+                                  transaction.set(extratoRef, {
+                                    'id': extratoRef.id,
+                                    'idUsuario': uid,
+                                    'tipo': 'saida',
+                                    'categoria': 'saque',
+                                    'valor': valorSaque,
+                                    'saldoAnterior': saldoAtual,
+                                    'saldoAtual': novoSaldo,
+                                    'descricao': 'Saque solicitado',
+                                    'status': 'pendente',
+                                    'data': FieldValue.serverTimestamp(),
+                                  });
+
+                                  transaction.set(saqueRef, {
+                                    'id': saqueRef.id,
+                                    'idGoleiro': uid,
+                                    'nomeGoleiro': nomeGoleiro,
+                                    'valor': valorSaque,
+                                    'chavePix': chavePix,
+                                    'tipoPix': tipoPix,
+                                    'status': 'pendente',
+                                    'idExtrato': extratoRef.id,
+                                    'dataSolicitacao': FieldValue.serverTimestamp(),
+                                  });
+                                });
+
+                                if (context.mounted) {
+                                  Navigator.pop(ctx);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text("Saque solicitado com sucesso!"),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                setStateSB(() => processando = false);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("Erro: $e"), backgroundColor: Colors.redAccent),
+                                  );
+                                }
+                              }
+                            },
+                      child: processando
+                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                          : const Text("CONFIRMAR SAQUE", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _mostrarAlertaPixAusente(BuildContext context, Color primary) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
+            SizedBox(width: 10),
+            Text("PIX não cadastrado", style: TextStyle(color: Colors.white, fontSize: 18)),
+          ],
+        ),
+        content: const Text(
+          "Para realizar saques, você precisa cadastrar sua Chave PIX primeiro.\n\nQuer fazer isso agora?",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("DEPOIS", style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primary),
+            onPressed: () {
+              Navigator.pop(ctx);
+              ModalCadastroPix.show(context);
+            },
+            child: const Text("CADASTRAR PIX", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cardStatusEspecial(String titulo, double valor, IconData icone, Color cor) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -282,102 +524,165 @@ class AbaCarteira extends StatelessWidget {
               const SizedBox(width: 5),
               Text(
                 titulo,
-                style: TextStyle(
-                  color: cor,
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(color: cor, fontSize: 9, fontWeight: FontWeight.bold),
               ),
             ],
           ),
           const SizedBox(height: 5),
           Text(
             "R\$ ${valor.toStringAsFixed(2)}",
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
+            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildItemHistoricoGoleiro(
-    String local,
-    DateTime data,
-    dynamic valor,
-    Color cor,
-    String metodo,
-    String status,
-  ) {
+Widget _buildItemHistoricoGoleiro(String local, DateTime data, dynamic valor, Color cor, String status, bool isSaida) {
     bool isContestado = status == 'contestado';
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: cor.withOpacity(0.1),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          isContestado ? Icons.lock_outline : Icons.add,
-          color: cor,
-          size: 18,
-        ),
+    bool isPendente = status == 'pendente';
+    
+    IconData iconeLista = isContestado ? Icons.lock_outline : (isSaida ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded);
+    String sinalOperacao = isSaida ? "- R\$" : "+ R\$";
+    
+    String textoBadge = "CONCLUÍDO";
+    Color corBadge = const Color(0xFF00E676); 
+    
+    if (isContestado) {
+      textoBadge = "BLOQUEADO";
+      corBadge = Colors.orangeAccent;
+    } else if (isPendente) {
+      textoBadge = "PROCESSANDO";
+      corBadge = Colors.amber;
+    } else if (isSaida) {
+      textoBadge = "SAQUE";
+      corBadge = Colors.redAccent;
+    }
+
+    // ✨ A MÁGICA DO HORÁRIO ENTRA AQUI (Zero custo de banco de dados)
+    String dataFormatada = "${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')} às ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}";
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.02),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      title: Text(
-        local,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      subtitle: Text(
-        "${data.day}/${data.month} • ${isContestado ? 'Bloqueado (Contestação)' : 'Crédito liberado'}",
-        style: TextStyle(
-          color: isContestado
-              ? Colors.orangeAccent.withOpacity(0.7)
-              : Colors.white38,
-          fontSize: 11,
-        ),
-      ),
-      trailing: Text(
-        "+ R\$ $valor",
-        style: TextStyle(color: cor, fontWeight: FontWeight.bold, fontSize: 15),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: cor.withOpacity(0.1), shape: BoxShape.circle),
+            child: Icon(iconeLista, color: cor, size: 20),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  local,
+                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: corBadge.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: corBadge.withOpacity(0.2)),
+                      ),
+                      child: Text(
+                        textoBadge,
+                        style: TextStyle(color: corBadge, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Agora a data vem com o horário bonitinho
+                    Text(
+                      dataFormatada,
+                      style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Text(
+            "$sinalOperacao ${double.parse(valor.toString()).toStringAsFixed(2)}",
+            style: TextStyle(color: cor, fontWeight: FontWeight.w900, fontSize: 16),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildItemMulta(String desc, DateTime data, dynamic valor) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: Colors.redAccent.withOpacity(0.1),
-          shape: BoxShape.circle,
-        ),
-        child: const Icon(Icons.remove, color: Colors.redAccent, size: 18),
+    // ✨ HORÁRIO NA MULTA TAMBÉM
+    String dataFormatada = "${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')} às ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}";
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.redAccent.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.redAccent.withOpacity(0.1)),
       ),
-      title: Text(
-        desc,
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-      ),
-      subtitle: Text(
-        "${data.day}/${data.month} • Multa aplicada",
-        style: const TextStyle(color: Colors.white38, fontSize: 11),
-      ),
-      trailing: Text(
-        "- R\$ $valor",
-        style: const TextStyle(
-          color: Colors.redAccent,
-          fontWeight: FontWeight.bold,
-          fontSize: 15,
-        ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.1), shape: BoxShape.circle),
+            child: const Icon(Icons.remove, color: Colors.redAccent, size: 20),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  desc,
+                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
+                      ),
+                      child: const Text(
+                        "MULTA",
+                        style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      dataFormatada,
+                      style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Text(
+            "- R\$ ${double.parse(valor.toString()).toStringAsFixed(2)}",
+            style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w900, fontSize: 16),
+          ),
+        ],
       ),
     );
   }
+  
 }

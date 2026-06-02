@@ -1,24 +1,56 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'core/app.dart'; // Certifique-se que este caminho está certo
+import 'core/app.dart';
 
 void main() async {
-  // 1. Acorda o Flutter
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  await Future.wait([
+    // MUDANÇA: 'edgeToEdge' é muito mais fluido para o teclado do que 'immersiveSticky'
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge),
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
+  ]);
+
+  // Mantemos o estilo premium, mas permitindo que o sistema gerencie o teclado melhor
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
+
   try {
-    // 2. Inicia o Firebase
     await Firebase.initializeApp();
     debugPrint("Firebase OK!");
   } catch (e) {
     debugPrint("Erro Firebase: $e");
   }
 
-  // 3. Roda o SEU APP real agora
   runApp(
     const ProviderScope(
-      child: DefendePraMimApp(),
+      child: GlobalKeyboardDismiss(child: DefendePraMimApp()),
     ),
   );
+}
+
+/// 🔑 WRAPPER CIRÚRGICO: Fecha o teclado ao tocar em qualquer lugar vazio do app
+class GlobalKeyboardDismiss extends StatelessWidget {
+  final Widget child;
+  const GlobalKeyboardDismiss({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        // Encontra o foco atual e o remove, fechando o teclado com suavidade
+        FocusScopeNode currentFocus = FocusScope.of(context);
+        if (!currentFocus.hasPrimaryFocus && currentFocus.focusedChild != null) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+      },
+      child: child,
+    );
+  }
 }

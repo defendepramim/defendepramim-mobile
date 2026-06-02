@@ -10,8 +10,9 @@ class CampoInput extends StatelessWidget {
   final TextInputType keyboardType;
   final List<TextInputFormatter>? inputFormatters;
   final String? Function(String?)? validator;
-  final TextInputAction? textInputAction; // Melhoria de UX
-  final Function(String)? onChanged; // Para validação dinâmica
+  final TextInputAction? textInputAction;
+  final Function(String)? onChanged;
+  final void Function(String)? onFieldSubmitted;
 
   const CampoInput({
     super.key,
@@ -25,12 +26,15 @@ class CampoInput extends StatelessWidget {
     this.validator,
     this.textInputAction,
     this.onChanged,
+    this.onFieldSubmitted,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Pegando a cor primária do tema para não ficar "hardcoded"
-    final primaryColor = Theme.of(context).primaryColor;
+    // Cores estáticas em Hexadecimal (Evita cálculos de opacidade em tempo de execução)
+    const neonGreen = Color(0xFF00E676);
+    const darkInputBg = Color(0x0DFFFFFF); // Equivalente a Colors.white.withOpacity(0.05)
+    const borderColor = Color(0x1AFFFFFF); // Equivalente a Colors.white10
 
     return TextFormField(
       controller: controller,
@@ -40,38 +44,41 @@ class CampoInput extends StatelessWidget {
       validator: validator,
       textInputAction: textInputAction,
       onChanged: onChanged,
+      onFieldSubmitted: onFieldSubmitted,
       
-      // Estilo do texto digitado
-      style: const TextStyle(fontSize: 16),
-
+      // ✨ PROTEÇÃO DE PERFORMANCE DO TECLADO: 
+      // Se for senha, desliga o corretor ortográfico e as sugestões do teclado.
+      // Isso tira um peso gigantesco do processador do celular na hora de digitar!
+      autocorrect: !obscure,
+      enableSuggestions: !obscure,
+      
+      style: const TextStyle(fontSize: 16, color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
+        labelStyle: const TextStyle(color: Colors.grey),
         prefixIcon: Icon(icon, color: Colors.grey[600]),
         suffixIcon: suffixIcon,
         
-        // Espaçamento interno
         contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
 
-        // Borda padrão
-        border: OutlineInputBorder(
+        enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade400),
+          borderSide: const BorderSide(color: borderColor),
         ),
 
-        // Borda quando clicado (Foco)
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: primaryColor, width: 2),
+          borderSide: const BorderSide(color: neonGreen, width: 2),
         ),
 
-        // Borda de erro
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Colors.red, width: 1),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 1),
         ),
         
-        // Label flutuante quando focado
-        floatingLabelStyle: TextStyle(color: primaryColor),
+        floatingLabelStyle: const TextStyle(color: neonGreen),
+        filled: true,
+        fillColor: darkInputBg,
       ),
     );
   }
