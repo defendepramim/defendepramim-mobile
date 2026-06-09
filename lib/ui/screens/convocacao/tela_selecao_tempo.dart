@@ -95,12 +95,15 @@ class _TelaSelecaoTempoState extends State<TelaSelecaoTempo> {
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // SELEÇÃO DE DATA
-          ListTile(
-            title: const Text("Data:", style: TextStyle(color: Colors.white70)),
+body: SafeArea( // 🛡️ A ARMADURA DO EDGE-TO-EDGE AQUI
+        top: true,    // Protege contra a câmera/hora
+        bottom: true, // Protege contra a barra de navegação/tracinho
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // SELEÇÃO DE DATA
+            ListTile(
+              title: const Text("Data:", style: TextStyle(color: Colors.white70)),
             trailing: Text(
               dataSelt == null ? "Selecionar" : "${dataSelt!.day}/${dataSelt!.month}/${dataSelt!.year}",
               style: TextStyle(color: primaryColor, fontSize: 18, fontWeight: FontWeight.bold),
@@ -168,6 +171,7 @@ class _TelaSelecaoTempoState extends State<TelaSelecaoTempo> {
           ),
 
           // BOTÃO CONFIRMAR
+          // BOTÃO CONFIRMAR
           Padding(
             padding: const EdgeInsets.all(20),
             child: SizedBox(
@@ -181,27 +185,37 @@ class _TelaSelecaoTempoState extends State<TelaSelecaoTempo> {
                 onPressed: dataSelt == null ? null : () {
                   final agora = DateTime.now();
                   
-                  // Validação: Não permitir horários que já passaram hoje
-                  if (dataSelt!.year == agora.year &&
-                      dataSelt!.month == agora.month &&
-                      dataSelt!.day == agora.day) {
-                    
-                    final minutoSelt = (horaSelt.hour * 60) + horaSelt.minute;
-                    final minutoAgora = (agora.hour * 60) + agora.minute;
+                  // Monta o horário completo e absoluto do jogo selecionado
+                  final dataHoraJogo = DateTime(
+                    dataSelt!.year,
+                    dataSelt!.month,
+                    dataSelt!.day,
+                    horaSelt.hour,
+                    horaSelt.minute,
+                  );
 
-                    if (minutoSelt < minutoAgora) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("O horário escolhido já passou!")),
-                      );
-                      return;
-                    }
+                  // 1. Validação de jogo que já passou
+                  if (dataHoraJogo.isBefore(agora)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("O horário escolhido já passou!")),
+                    );
+                    return;
                   }
 
-                  // RETORNO: Aqui acontece a mágica dos MINUTOS
+                  // 2. Trava estrita de antecedência de 2 horas!
+                  final diferenca = dataHoraJogo.difference(agora);
+                  if (diferenca.inHours < 2) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("O jogo precisa ser marcado com pelo menos 2 horas de antecedência!")),
+                    );
+                    return;
+                  }
+
+                  // RETORNO: Se sobreviveu às validações, retorna os dados lindamente
                   Navigator.pop(context, DadosTempo(
                     data: dataSelt!, 
                     hora: horaSelt, 
-                    duracao: duracaoSeltHoras * 60, // Salva 60 ou 120 no Firestore
+                    duracao: duracaoSeltHoras * 60, // Salva 60 ou 120
                   ));
                 },
                 child: Text("CONFIRMAR", 
@@ -214,6 +228,7 @@ class _TelaSelecaoTempoState extends State<TelaSelecaoTempo> {
             ),
           )
         ],
+      ),
       ),
     );
   }

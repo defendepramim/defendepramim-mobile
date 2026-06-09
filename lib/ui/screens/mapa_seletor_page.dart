@@ -201,21 +201,31 @@ Future<void> _buscarEnderecoTexto(String texto) async {
     _atualizarEnderecoRua(_posicaoAtual);
   }
 
-  Future<void> _atualizarEnderecoRua(LatLng pos) async {
+Future<void> _atualizarEnderecoRua(LatLng pos) async {
     try {
       List<Placemark> locais = await placemarkFromCoordinates(pos.latitude, pos.longitude);
       if (locais.isNotEmpty) {
         Placemark lugar = locais.first;
         
         setState(() {
-          // Garante que só mostra a Rua e o Bairro
           String rua = lugar.thoroughfare ?? lugar.street ?? "Endereço desconhecido";
+          String numero = lugar.subThoroughfare ?? ""; // 🟢 AQUI ESTÁ A MÁGICA DO NÚMERO!
           String bairro = lugar.subLocality ?? lugar.locality ?? "";
           
-          _ruaEletro = bairro.isNotEmpty ? "$rua, $bairro" : rua;
+          // Monta o endereço no padrão brasileiro
+          String enderecoCompleto = rua;
           
-          // 🔥 REMOVIDO: Tiramos a parte que forçava o nome do local automático 
-          // que estava puxando nomes "nada a ver". Agora o usuário digita o nome!
+          // Se o Google achar o número, adiciona com vírgula
+          if (numero.isNotEmpty && numero != "S/N") {
+            enderecoCompleto += ", $numero";
+          }
+          
+          // Adiciona o bairro com um tracinho
+          if (bairro.isNotEmpty) {
+            enderecoCompleto += " - $bairro";
+          }
+          
+          _ruaEletro = enderecoCompleto;
         });
       }
     } catch (e) {
@@ -223,21 +233,21 @@ Future<void> _buscarEnderecoTexto(String texto) async {
     }
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         alignment: Alignment.center,
         children: [
-          // 1. MAPA EM TELA CHEIA
+          // 1. MAPA EM TELA CHEIA (Fica fora do SafeArea para o efeito de fundo infinito)
           GoogleMap(
             initialCameraPosition: CameraPosition(target: _posicaoAtual, zoom: 15),
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
             mapToolbarEnabled: false,
             zoomControlsEnabled: false,
-            markers: _pinosQuadras, // 👈 ADICIONE ESTA LINHA AQUI!
+            markers: _pinosQuadras,
             onMapCreated: (controller) {
               _mapController = controller;
               _mapController?.setMapStyle(_mapStyle);
@@ -246,7 +256,7 @@ Future<void> _buscarEnderecoTexto(String texto) async {
             onCameraMove: (pos) => _posicaoAtual = pos.target,
           ),
 
-          // 2. PINO FIXO NO MEIO
+          // 2. PINO FIXO NO MEIO (Fica fora do SafeArea para centralizar perfeitamente no mapa)
           const Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -255,157 +265,164 @@ Future<void> _buscarEnderecoTexto(String texto) async {
             ],
           ),
 
-          // 3. 🔍 BARRA DE BUSCA COMPLETA (NO TOPO)
-          Positioned(
-            top: 50,
-            left: 20,
-            right: 20,
-            child: Column(
+          // 🟢 ARMADURA: Protege APENAS os itens da interface
+          SafeArea(
+            child: Stack(
               children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E1E1E),
-                    borderRadius: BorderRadius.circular(15),
-                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]
+                // 3. 🔍 BARRA DE BUSCA COMPLETA (NO TOPO)
+                Positioned(
+                  top: 10, // Agora o top não precisa ser "50", o SafeArea já faz o distanciamento da câmera
+                  left: 20,
+                  right: 20,
+                  child: Column(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E1E1E),
+                          borderRadius: BorderRadius.circular(15),
+                          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)]
+                        ),
+                        child: TextField(
+                          controller: _cBusca,
+                          style: const TextStyle(color: Colors.white),
+                          onChanged: (val) => _buscarEnderecoTexto(val),
+                          decoration: InputDecoration(
+                            hintText: "Buscar rua, bairro ou arena...",
+                            hintStyle: const TextStyle(color: Colors.white54),
+                            prefixIcon: const Icon(Icons.search, color: Color(0xFF00E676)),
+                            suffixIcon: _cBusca.text.isNotEmpty 
+                              ? IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => setState(() { _cBusca.clear(); _previsoesBusca = []; }))
+                              : null,
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 15),
+                          ),
+                        ),
+                      ),
+                      
+                      // Lista suspensa de resultados da busca
+                      if (_previsoesBusca.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(top: 5),
+                          constraints: const BoxConstraints(maxHeight: 250),
+                          decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12)),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            itemCount: _previsoesBusca.length,
+                            itemBuilder: (context, index) {
+                              final p = _previsoesBusca[index];
+                              return ListTile(
+                                leading: const Icon(Icons.location_on, color: Colors.grey, size: 18),
+                                title: Text(p['structured_formatting']['main_text'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 14)),
+                                subtitle: Text(p['structured_formatting']['secondary_text'] ?? '', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                                onTap: () => _irParaLugarUid(p['place_id'], p['structured_formatting']['main_text']),
+                              );
+                            },
+                          ),
+                        ),
+                    ],
                   ),
-                  child: TextField(
-                    controller: _cBusca,
-                    style: const TextStyle(color: Colors.white),
-                    onChanged: (val) => _buscarEnderecoTexto(val),
-                    decoration: InputDecoration(
-                      hintText: "Buscar rua, bairro ou arena...",
-                      hintStyle: const TextStyle(color: Colors.white54),
-                      prefixIcon: const Icon(Icons.search, color: Color(0xFF00E676)),
-                      suffixIcon: _cBusca.text.isNotEmpty 
-                        ? IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => setState(() { _cBusca.clear(); _previsoesBusca = []; }))
-                        : null,
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 15),
+                ),
+
+                // Botão GPS atual
+                Positioned(
+                  bottom: 290, // Subimos um pouquinho pra não colar no painel
+                  right: 20,
+                  child: FloatingActionButton(
+                    backgroundColor: const Color(0xFF1E1E1E),
+                    mini: true,
+                    child: const Icon(Icons.my_location, color: Color(0xFF00E676)),
+                    onPressed: () => _pegarLocalizacaoAtual(),
+                  ),
+                ),
+
+                // 4. 🏢 NOVO PAINEL INFERIOR COM CAMPOS DA QUADRA E OBSERVAÇÕES
+                Positioned(
+                  bottom: 10, // Agora o bottom fica baixinho, pois o SafeArea protege contra a navegação
+                  left: 20,
+                  right: 20,
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 15, spreadRadius: 2)]
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Exibe a rua atual onde o pino está em cima
+                        Text(_ruaEletro, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                        const SizedBox(height: 12),
+
+                        // Campo 1: Nome da Quadra (Obrigatório para o nosso Crowdsourcing!)
+                        TextField(
+                          controller: _cNomeQuadra,
+                          style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                          decoration: InputDecoration(
+                            hintText: "Nome do Estabelecimento / Quadra",
+                            hintStyle: const TextStyle(color: Colors.white24),
+                            prefixIcon: const Icon(Icons.sports_soccer, color: Color(0xFF00E676), size: 18),
+                            filled: true,
+                            fillColor: Colors.black26,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+
+                        // Campo 2: Observações específicas
+                        TextField(
+                          controller: _cObsQuadra,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          decoration: InputDecoration(
+                            hintText: "Observações (Ex: Quadra 3, Churrasqueira)",
+                            hintStyle: const TextStyle(color: Colors.white24),
+                            prefixIcon: const Icon(Icons.edit_note, color: Colors.grey, size: 18),
+                            filled: true,
+                            fillColor: Colors.black26,
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Botão de Confirmação Final
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00E676),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            onPressed: () {
+                              // Validação básica: Não deixa salvar sem dar um nome para o local
+                              if (_cNomeQuadra.text.trim().isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("Dê um nome para a Quadra/Local!"), backgroundColor: Colors.orangeAccent)
+                                );
+                                return;
+                              }
+
+                              // Devolve tudo mastigadinho para a tela de criação
+                              Navigator.pop(context, {
+                                'nomeLocal': _cNomeQuadra.text.trim(),
+                                'enderecoRua': _ruaEletro,
+                                'obs': _cObsQuadra.text.trim(),
+                                'lat': _posicaoAtual.latitude,
+                                'lng': _posicaoAtual.longitude,
+                              });
+                            },
+                            child: const Text("CONFIRMAR LOCAL E DADOS", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900)),
+                          ),
+                        )
+                      ],
                     ),
                   ),
                 ),
-                
-                // Lista suspensa de resultados da busca
-                if (_previsoesBusca.isNotEmpty)
-                  Container(
-                    margin: const EdgeInsets.only(top: 5),
-                    constraints: const BoxConstraints(maxHeight: 250),
-                    decoration: BoxDecoration(color: const Color(0xFF1E1E1E), borderRadius: BorderRadius.circular(12)),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      padding: EdgeInsets.zero,
-                      itemCount: _previsoesBusca.length,
-                      itemBuilder: (context, index) {
-                        final p = _previsoesBusca[index];
-                        return ListTile(
-                          leading: const Icon(Icons.location_on, color: Colors.grey, size: 18),
-                          title: Text(p['structured_formatting']['main_text'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 14)),
-                          subtitle: Text(p['structured_formatting']['secondary_text'] ?? '', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                          onTap: () => _irParaLugarUid(p['place_id'], p['structured_formatting']['main_text']),
-                        );
-                      },
-                    ),
-                  ),
               ],
-            ),
-          ),
-
-          // Botão GPS atual
-          Positioned(
-            bottom: 310,
-            right: 20,
-            child: FloatingActionButton(
-              backgroundColor: const Color(0xFF1E1E1E),
-              mini: true,
-              child: const Icon(Icons.my_location, color: Color(0xFF00E676)),
-              onPressed: () => _pegarLocalizacaoAtual(),
-            ),
-          ),
-
-          // 4. 🏢 NOVO PAINEL INFERIOR COM CAMPOS DA QUADRA E OBSERVAÇÕES
-          Positioned(
-            bottom: 20,
-            left: 20,
-            right: 20,
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E),
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 15, spreadRadius: 2)]
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Exibe a rua atual onde o pino está em cima
-                  Text(_ruaEletro, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                  const SizedBox(height: 12),
-
-                  // Campo 1: Nome da Quadra (Obrigatório para o nosso Crowdsourcing!)
-                  TextField(
-                    controller: _cNomeQuadra,
-                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                    decoration: InputDecoration(
-                      hintText: "Nome do Estabelecimento / Quadra",
-                      hintStyle: const TextStyle(color: Colors.white24),
-                      prefixIcon: const Icon(Icons.sports_soccer, color: Color(0xFF00E676), size: 18),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Campo 2: Observações específicas
-                  TextField(
-                    controller: _cObsQuadra,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                    decoration: InputDecoration(
-                      hintText: "Observações (Ex: Quadra 3, Churrasqueira)",
-                      hintStyle: const TextStyle(color: Colors.white24),
-                      prefixIcon: const Icon(Icons.edit_note, color: Colors.grey, size: 18),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Botão de Confirmação Final
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00E676),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () {
-                        // Validação básica: Não deixa salvar sem dar um nome para o local
-                        if (_cNomeQuadra.text.trim().isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Dê um nome para a Quadra/Local!"), backgroundColor: Colors.orangeAccent)
-                          );
-                          return;
-                        }
-
-                        // Devolve tudo mastigadinho para a tela de criação
-                        Navigator.pop(context, {
-                          'nomeLocal': _cNomeQuadra.text.trim(),
-                          'enderecoRua': _ruaEletro,
-                          'obs': _cObsQuadra.text.trim(),
-                          'lat': _posicaoAtual.latitude,
-                          'lng': _posicaoAtual.longitude,
-                        });
-                      },
-                      child: const Text("CONFIRMAR LOCAL E DADOS", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900)),
-                    ),
-                  )
-                ],
-              ),
             ),
           ),
         ],

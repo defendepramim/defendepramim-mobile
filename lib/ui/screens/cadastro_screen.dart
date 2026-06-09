@@ -4,9 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mask_text_input_formatter/mask_text_input_formatter.dart';
 
 class TelaCadastro extends StatefulWidget {
-  // 🌐 O PULO DO GATO: Se este parâmetro for preenchido, o app sabe que o usuário veio do Google!
   final User? googleUser;
-
   const TelaCadastro({super.key, this.googleUser});
 
   @override
@@ -14,11 +12,10 @@ class TelaCadastro extends StatefulWidget {
 }
 
 class _TelaCadastroState extends State<TelaCadastro> {
-  final _pageController = PageController();
   final _formKeyEtapa1 = GlobalKey<FormState>();
   final _formKeyEtapa2 = GlobalKey<FormState>();
+  final _formKeyGoogle = GlobalKey<FormState>(); 
 
-  // Controllers
   final _nomeController = TextEditingController();
   final _cpfController = TextEditingController();
   final _telefoneController = TextEditingController();
@@ -26,7 +23,6 @@ class _TelaCadastroState extends State<TelaCadastro> {
   final _senhaController = TextEditingController();
   final _confirmarSenhaController = TextEditingController();
 
-  // Estados
   int _paginaAtual = 0;
   String? _tipoUsuario; 
   bool _maiorDe16 = false;
@@ -36,26 +32,36 @@ class _TelaCadastroState extends State<TelaCadastro> {
   bool _obscureConfirmar = true; 
   String? _erroGeral;
 
-  // Máscaras (Blindagem de input)
+  bool _isGoogleMode = false;
+  User? _usuarioLogado; 
+
   final _cpfMask = MaskTextInputFormatter(mask: '###.###.###-##', filter: {"#": RegExp(r'[0-9]')});
   final _telMask = MaskTextInputFormatter(mask: '(##) #####-####', filter: {"#": RegExp(r'[0-9]')});
-
-  // 🌐 Verifica se estamos apenas completando o cadastro do Google
-  bool get _isGoogleMode => widget.googleUser != null;
 
   @override
   void initState() {
     super.initState();
-    // 🌐 SE VIER DO GOOGLE: Pré-preenche os dados que o Google já nos deu de bandeja!
-    if (_isGoogleMode) {
-      _nomeController.text = widget.googleUser!.displayName ?? "";
-      _emailController.text = widget.googleUser!.email ?? "";
+    _verificarModoGoogle(); 
+  }
+
+  void _verificarModoGoogle() {
+    _usuarioLogado = widget.googleUser ?? FirebaseAuth.instance.currentUser;
+
+    if (_usuarioLogado != null) {
+      bool veioDoGoogle = _usuarioLogado!.providerData.any((p) => p.providerId == 'google.com');
+
+      if (veioDoGoogle) {
+        setState(() {
+          _isGoogleMode = true; 
+          _nomeController.text = _usuarioLogado!.displayName ?? "";
+          _emailController.text = _usuarioLogado!.email ?? "";
+        });
+      }
     }
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
     _nomeController.dispose();
     _cpfController.dispose();
     _telefoneController.dispose();
@@ -64,8 +70,6 @@ class _TelaCadastroState extends State<TelaCadastro> {
     _confirmarSenhaController.dispose();
     super.dispose();
   }
-
-  // --- 🛡️ LÓGICA DE SEGURANÇA E NEGÓCIO ---
 
   void _setErro(String? msg) => setState(() => _erroGeral = msg);
 
@@ -77,10 +81,13 @@ class _TelaCadastroState extends State<TelaCadastro> {
   }
 
   void _mostrarTermos() {
+    // 🟢 MATADOR DE TECLADO: Tira o foco antes de abrir o Modal
+    FocusManager.instance.primaryFocus?.unfocus();
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
@@ -90,7 +97,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
         content: const SingleChildScrollView(
           child: Text(
             "1. O DefendePraMim liga goleiros a contratantes.\n\n"
-            "2. Dados como WhatsApp e Nome serão partilhados entre as partes após a confirmation do jogo.\n\n"
+            "2. Dados como WhatsApp e Nome serão partilhados entre as partes após a confirmação do jogo.\n\n"
             "3. Cancelamentos tardios podem gerar multas no saldo da conta.\n\n"
             "4. O utilizador é responsável pela veracidade dos dados bancários e documentos.",
             style: TextStyle(color: Colors.white70, fontSize: 14),
@@ -98,14 +105,14 @@ class _TelaCadastroState extends State<TelaCadastro> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text("FECHAR", style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
             onPressed: () {
               setState(() => _aceitouTermos = true);
-              Navigator.pop(context);
+              Navigator.pop(ctx);
             },
             child: const Text("ACEITAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           ),
@@ -116,7 +123,16 @@ class _TelaCadastroState extends State<TelaCadastro> {
 
   Future<void> _finalizarCadastro() async {
     _setErro(null);
-    if (!_formKeyEtapa2.currentState!.validate()) return;
+    
+    if (_isGoogleMode) {
+      if (!_formKeyGoogle.currentState!.validate()) return;
+      if (_tipoUsuario == null) {
+        _setErro("Por favor, selecione seu perfil (Goleiro ou Contratante).");
+        return;
+      }
+    } else {
+      if (!_formKeyEtapa2.currentState!.validate()) return;
+    }
     
     if (!_aceitouTermos || !_maiorDe16) {
       _setErro("Aceite os termos e confirme a idade para continuar.");
@@ -127,21 +143,21 @@ class _TelaCadastroState extends State<TelaCadastro> {
 
     try {
       String userUid;
+      bool precisaVerificarEmail = false; 
 
       if (_isGoogleMode) {
-        // 🌐 MODO GOOGLE: O usuário já está autenticado no Firebase Auth! 
-        // Não criamos conta de e-mail/senha, apenas pegamos o UID existente.
-        userUid = widget.googleUser!.uid;
+        userUid = _usuarioLogado!.uid; 
       } else {
-        // MODO TRADICIONAL: Cria a conta com e-mail e senha normalmente
         final userCred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: _emailController.text.trim().toLowerCase(),
           password: _senhaController.text.trim(),
         );
         userUid = userCred.user!.uid;
+        
+        await userCred.user!.sendEmailVerification();
+        precisaVerificarEmail = true;
       }
 
-      // Salva os dados unificados na Coleção de Usuários do Firestore
       await FirebaseFirestore.instance.collection('usuarios').doc(userUid).set({
         'uid': userUid,
         'nome': _nomeController.text.trim(),
@@ -150,8 +166,8 @@ class _TelaCadastroState extends State<TelaCadastro> {
         'cpf': _cpfController.text.replaceAll(RegExp(r'[^0-9]'), ''),
         'telefone': _telefoneController.text.trim(),
         'tipoPerfil': _tipoUsuario,
-        'fotoUrl': widget.googleUser?.photoURL ?? "", // 🌐 Guarda a foto de perfil do Google se houver
-        'provedorAutenticacao': _isGoogleMode ? 'google' : 'email', // Excelente para métricas do Admin!
+        'fotoUrl': _usuarioLogado?.photoURL ?? "", 
+        'provedorAutenticacao': _isGoogleMode ? 'google' : 'email',
         'saldo': 0.0,
         'multasPendentes': 0.0,
         'qtdDesistencias': 0,
@@ -162,19 +178,58 @@ class _TelaCadastroState extends State<TelaCadastro> {
       });
 
       if (mounted) {
-        // Fecha todas as telas de autenticação e joga o cara pra Home
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        if (precisaVerificarEmail) {
+          await FirebaseAuth.instance.signOut();
+          
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text("Falta pouco!", style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
+              content: const Text(
+                "Enviamos um link de confirmação para o seu e-mail. Por favor, clique nele para ativar sua conta antes de fazer o login.",
+                style: TextStyle(color: Colors.white70),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx); 
+                    Navigator.pop(context); 
+                  },
+                  child: const Text("IR PARA O LOGIN", style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          );
+        } else {
+          Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+        }
       }
     } on FirebaseAuthException catch (e) {
       _setErro(e.code == 'email-already-in-use' ? "Este e-mail já existe." : "Erro: ${e.message}");
     } catch (e) {
-      _setErro("Erro técnico. Verifique a ligação à internet.");
+      debugPrint("🚨 ERRO NO FIRESTORE: $e");
+      _setErro("Erro real: $e");
     } finally {
       if (mounted) setState(() => _carregando = false);
     }
   }
 
-  // --- 🎨 INTERFACE (UI/UX) ---
+  // 🟢 CORREÇÃO DO BOTÃO VOLTAR
+  Future<void> _acaoVoltar() async {
+    if (_isGoogleMode) {
+      await FirebaseAuth.instance.signOut();
+      if (mounted) Navigator.pop(context);
+    } else {
+      if (_paginaAtual == 1) {
+        setState(() => _paginaAtual = 0);
+      } else {
+        if (mounted) Navigator.pop(context);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -187,30 +242,85 @@ class _TelaCadastroState extends State<TelaCadastro> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-          onPressed: () {
-            if (_paginaAtual > 0) {
-              _pageController.previousPage(duration: const Duration(milliseconds: 300), curve: Curves.ease);
-            } else {
-              Navigator.pop(context);
-            }
-          },
+          onPressed: _acaoVoltar,
         ),
-        title: _buildStepIndicator(primaryNeon),
+        title: _isGoogleMode 
+            ? const Text("Finalizar Perfil", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))
+            : _buildStepIndicator(primaryNeon),
         centerTitle: true,
       ),
-      body: PageView(
-        controller: _pageController,
-        // Impedir o arrasto por gesto se for o modo Google para forçar a validação da Etapa 1
-        physics: const BouncingScrollPhysics(),
-        onPageChanged: (index) {
-          setState(() {
-            _paginaAtual = index;
-          });
-        },
-        children: [
-          _buildEtapa1(primaryNeon),
-          _buildEtapa2(primaryNeon),
-        ],
+      body: SafeArea(
+        child: _isGoogleMode 
+            ? _buildTelaUnicaGoogle(primaryNeon) 
+            : IndexedStack(
+                index: _paginaAtual,
+                children: [
+                  _buildEtapa1(primaryNeon),
+                  _buildEtapa2(primaryNeon),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildTelaUnicaGoogle(Color color) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Form(
+        key: _formKeyGoogle,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Falta pouco!", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
+            const SizedBox(height: 8),
+            const Text("Precisamos apenas de mais alguns dados para ativar sua conta na plataforma.", style: TextStyle(color: Colors.white54, height: 1.4)),
+            const SizedBox(height: 30),
+            
+            _buildSeletorPerfil(color),
+            const SizedBox(height: 30),
+            
+            _input(
+              controller: _cpfController, 
+              label: "CPF", 
+              icon: Icons.badge_outlined, 
+              mask: _cpfMask, 
+              keyboard: TextInputType.number,
+              validator: (v) => !_validarCPF(v!) ? "CPF inválido" : null
+            ),
+            _input(
+              controller: _telefoneController, 
+              label: "WhatsApp", 
+              icon: Icons.phone_android, 
+              mask: _telMask, 
+              keyboard: TextInputType.phone,
+              validator: (v) => v!.length < 15 ? "Número incompleto" : null
+            ),
+            
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white.withAlpha(5), borderRadius: BorderRadius.circular(12)),
+              child: Row(
+                children: [
+                  Icon(Icons.g_mobiledata, color: color, size: 35),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      "Conectado como:\n${_emailController.text}",
+                      style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            _buildCheckboxes(color),
+            if (_erroGeral != null) _buildErroWidget(),
+            const SizedBox(height: 30),
+            _botaoAcao(_carregando ? "A CARREGAR..." : "CRIAR CONTA", color, _carregando ? null : _finalizarCadastro),
+          ],
+        ),
       ),
     );
   }
@@ -238,10 +348,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _isGoogleMode ? "Complete seu perfil" : "Crie sua conta", 
-              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)
-            ),
+            const Text("Crie sua conta", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
             const SizedBox(height: 30),
             _buildSeletorPerfil(color),
             const SizedBox(height: 30),
@@ -269,21 +376,17 @@ class _TelaCadastroState extends State<TelaCadastro> {
             ),
             
             if (_erroGeral != null && _paginaAtual == 0) 
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: _buildErroWidget(),
-              ),
+              Padding(padding: const EdgeInsets.only(top: 10), child: _buildErroWidget()),
 
             const SizedBox(height: 20),
             _botaoAcao("PRÓXIMO PASSO", color, () {
               _setErro(null);
-
               if (_formKeyEtapa1.currentState!.validate()) {
                 if (_tipoUsuario == null) {
                   _setErro("Por favor, selecione se você é GOLEIRO ou CONTRATANTE.");
                   return;
                 }
-                _pageController.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.ease);
+                setState(() => _paginaAtual = 1); 
               }
             }),
           ],
@@ -300,63 +403,43 @@ class _TelaCadastroState extends State<TelaCadastro> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _isGoogleMode ? "Termos e Condições" : "Dados de acesso", 
-              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)
-            ),
+            const Text("Dados de acesso", style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white)),
             const SizedBox(height: 30),
-            
-            // 🌐 MUTAÇÃO MÁGICA DO GOOGLE: Esconde os inputs de credenciais se logado via rede social
-            if (!_isGoogleMode) ...[
-              _input(
-                controller: _emailController, 
-                label: "E-mail", 
-                icon: Icons.email_outlined, 
-                keyboard: TextInputType.emailAddress,
-                validator: (v) => !v!.contains("@") ? "E-mail inválido" : null
+            _input(
+              controller: _emailController, 
+              label: "E-mail", 
+              icon: Icons.email_outlined, 
+              keyboard: TextInputType.emailAddress,
+              validator: (v) => !v!.contains("@") ? "E-mail inválido" : null
+            ),
+            _input(
+              controller: _senhaController, 
+              label: "Sua senha", 
+              icon: Icons.lock_outline, 
+              obscure: _obscureSenha,
+              suffix: IconButton(
+                icon: Icon(_obscureSenha ? Icons.visibility_off : Icons.visibility, color: Colors.grey), 
+                onPressed: () => setState(() => _obscureSenha = !_obscureSenha)
               ),
-              _input(
-                controller: _senhaController, 
-                label: "Sua senha", 
-                icon: Icons.lock_outline, 
-                obscure: _obscureSenha,
-                suffix: IconButton(
-                  icon: Icon(_obscureSenha ? Icons.visibility_off : Icons.visibility, color: Colors.grey), 
-                  onPressed: () => setState(() => _obscureSenha = !_obscureSenha)
-                ),
-                validator: (v) => v!.length < 6 ? "Mínimo 6 caracteres" : null,
+              validator: (v) {
+                if (v == null || v.isEmpty) return "A senha é obrigatória";
+                if (v.length < 8) return "No mínimo 8 caracteres";
+                if (!v.contains(RegExp(r'[a-zA-Z]'))) return "Deve conter pelo menos uma letra";
+                if (!v.contains(RegExp(r'[0-9]'))) return "Deve conter pelo menos um número";
+                return null;
+              },
+            ),
+            _input(
+              controller: _confirmarSenhaController, 
+              label: "Confirmar Senha", 
+              icon: Icons.lock_reset, 
+              obscure: _obscureConfirmar,
+              suffix: IconButton(
+                icon: Icon(_obscureConfirmar ? Icons.visibility_off : Icons.visibility, color: Colors.grey), 
+                onPressed: () => setState(() => _obscureConfirmar = !_obscureConfirmar)
               ),
-              _input(
-                controller: _confirmarSenhaController, 
-                label: "Confirmar Senha", 
-                icon: Icons.lock_reset, 
-                obscure: _obscureConfirmar,
-                suffix: IconButton(
-                  icon: Icon(_obscureConfirmar ? Icons.visibility_off : Icons.visibility, color: Colors.grey), 
-                  onPressed: () => setState(() => _obscureConfirmar = !_obscureConfirmar)
-                ),
-                validator: (v) => v != _senhaController.text ? "As senhas não coincidem" : null,
-              ),
-            ] else ...[
-              // Mensagem sutil avisando que a segurança é pelo Google
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.02), borderRadius: BorderRadius.circular(12)),
-                child: Row(
-                  children: [
-                    Icon(Icons.g_mobiledata, color: color, size: 30),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        "Autenticado via Google:\n${_emailController.text}",
-                        style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.2),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-            ],
+              validator: (v) => v != _senhaController.text ? "As senhas não coincidem" : null,
+            ),
 
             _buildCheckboxes(color),
             if (_erroGeral != null && _paginaAtual == 1) _buildErroWidget(),
@@ -367,8 +450,6 @@ class _TelaCadastroState extends State<TelaCadastro> {
       ),
     );
   }
-
-  // --- 🛠️ COMPONENTES REUTILIZÁVEIS ---
 
   Widget _input({
     required TextEditingController controller, 
@@ -390,7 +471,6 @@ class _TelaCadastroState extends State<TelaCadastro> {
         keyboardType: keyboard,
         textInputAction: action ?? TextInputAction.next,
         onFieldSubmitted: onSubmitted,
-        keyboardAppearance: Brightness.dark,
         inputFormatters: mask != null ? [mask] : [],
         validator: validator,
         style: const TextStyle(color: Colors.white, fontSize: 15),
@@ -400,7 +480,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
           prefixIcon: Icon(icon, color: const Color(0xFF00E676), size: 22),
           suffixIcon: suffix,
           filled: true, 
-          fillColor: const Color(0xFFFFFFFF).withOpacity(0.05),
+          fillColor: const Color(0xFFFFFFFF).withAlpha(13), 
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(15),
             borderSide: const BorderSide(color: Colors.white10, width: 1),
@@ -438,7 +518,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 20),
         decoration: BoxDecoration(
-          color: sel ? color.withOpacity(0.1) : const Color(0xFF222222),
+          color: sel ? color.withAlpha(26) : const Color(0xFF222222), 
           border: Border.all(color: sel ? color : Colors.white10, width: 2),
           borderRadius: BorderRadius.circular(15),
         ),
@@ -452,41 +532,50 @@ class _TelaCadastroState extends State<TelaCadastro> {
   }
 
   Widget _buildCheckboxes(Color color) {
-    return Column(children: [
-      CheckboxListTile(
-        value: _maiorDe16, 
-        onChanged: (v) => setState(() => _maiorDe16 = v!),
-        title: const Text("Sou maior de 16 anos", style: TextStyle(color: Colors.white, fontSize: 13)),
-        activeColor: color, 
-        checkColor: Colors.black,
-        contentPadding: EdgeInsets.zero, 
-        controlAffinity: ListTileControlAffinity.leading,
-      ),
-      CheckboxListTile(
-        value: _aceitouTermos, 
-        onChanged: (v) {
-          if (_aceitouTermos == false) {
-            _mostrarTermos();
-          } else {
-            setState(() => _aceitouTermos = v!);
-          }
-        },
-        activeColor: color, 
-        checkColor: Colors.black,
-        contentPadding: EdgeInsets.zero, 
-        controlAffinity: ListTileControlAffinity.leading,
-        title: Row(children: [
-          const Text("Aceito os ", style: TextStyle(color: Colors.white, fontSize: 13)),
-          GestureDetector(
-            onTap: _mostrarTermos, 
-            child: Text(
-              "Termos de Uso", 
-              style: TextStyle(color: color, decoration: TextDecoration.underline, fontWeight: FontWeight.bold)
-            )
+    return Column(
+      children: [
+        CheckboxListTile(
+          value: _maiorDe16, 
+          onChanged: (v) {
+            FocusManager.instance.primaryFocus?.unfocus();
+            setState(() => _maiorDe16 = v ?? false);
+          },
+          title: const Text("Sou maior de 16 anos", style: TextStyle(color: Colors.white, fontSize: 13)),
+          activeColor: color, 
+          checkColor: Colors.black,
+          contentPadding: EdgeInsets.zero, 
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        CheckboxListTile(
+          value: _aceitouTermos, 
+          onChanged: (v) {
+            FocusManager.instance.primaryFocus?.unfocus(); 
+            if (!_aceitouTermos) {
+              _mostrarTermos();
+            } else {
+              setState(() => _aceitouTermos = v ?? false);
+            }
+          },
+          activeColor: color, 
+          checkColor: Colors.black,
+          contentPadding: EdgeInsets.zero, 
+          controlAffinity: ListTileControlAffinity.leading,
+          title: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Text("Aceito os ", style: TextStyle(color: Colors.white, fontSize: 13)),
+              GestureDetector(
+                onTap: _mostrarTermos, 
+                child: Text(
+                  "Termos de Uso", 
+                  style: TextStyle(color: color, decoration: TextDecoration.underline, fontWeight: FontWeight.bold)
+                )
+              ),
+            ],
           ),
-        ]),
-      ),
-    ]);
+        ),
+      ],
+    );
   }
 
   Widget _botaoAcao(String texto, Color color, VoidCallback? acao) {
@@ -511,9 +600,9 @@ class _TelaCadastroState extends State<TelaCadastro> {
       margin: const EdgeInsets.only(top: 15),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.redAccent.withOpacity(0.1), 
+        color: Colors.redAccent.withAlpha(26), 
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
+        border: Border.all(color: Colors.redAccent.withAlpha(51)), 
       ),
       child: Row(children: [
         const Icon(Icons.error_outline, color: Colors.redAccent), 

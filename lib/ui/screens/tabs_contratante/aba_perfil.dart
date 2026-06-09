@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:permission_handler/permission_handler.dart'; // 🟢 Pacote de permissões
 
 class AbaPerfilContratante extends StatefulWidget {
   const AbaPerfilContratante({super.key});
@@ -20,6 +21,11 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
   static const surfaceColor = Color(0xFF121212);
   static const bgAvatar = Color(0xFF1E1E1E);
 
+  @override
+  void initState() {
+    super.initState();
+  }
+
   // ✨ BUSCA ORGANIZADOS E CANCELADOS
   Stream<Map<String, int>> _getEstatisticasContratante(String? uid) {
     if (uid == null) return Stream.value({'organizados': 0, 'cancelados': 0});
@@ -34,11 +40,9 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
 
       for (var doc in snapshot.docs) {
         final status = (doc.data()['status'] ?? '').toString().toLowerCase().trim();
-        
         if (status == 'cancelado') {
           cancelados++;
         } else {
-          // Tudo que não foi cancelado (aberto, fechado, finalizado, contestado) entra como organizado
           organizados++;
         }
       }
@@ -76,6 +80,124 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
     }
   }
 
+  Future<void> _editarNome(String nomeAtual) async {
+    final controller = TextEditingController(text: nomeAtual);
+    final formKey = GlobalKey<FormState>();
+    bool salvando = false;
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: surfaceColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: primaryColor, width: 0.5),
+              ),
+              title: const Text("Como prefere ser chamado?", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              content: Form(
+                key: formKey,
+                child: TextFormField(
+                  controller: controller,
+                  style: const TextStyle(color: Colors.white),
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    labelText: "Seu Nome Completo",
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white24)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: primaryColor)),
+                  ),
+                  validator: (v) => v!.trim().isEmpty ? "O nome não pode ser vazio" : null,
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: salvando ? null : () => Navigator.pop(context),
+                  child: const Text("CANCELAR", style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  onPressed: salvando ? null : () async {
+                    if (!formKey.currentState!.validate()) return;
+                    setDialogState(() => salvando = true);
+                    try {
+                      final user = FirebaseAuth.instance.currentUser;
+                      if (user != null) {
+                        await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).update({
+                          'nome': controller.text.trim(),
+                          'nomeBusca': controller.text.trim().toLowerCase(),
+                        });
+                        if (mounted) {
+                          Navigator.pop(context);
+                          _showSnackBarOriginal("Nome atualizado com sucesso!", Colors.green);
+                        }
+                      }
+                    } catch (e) {
+                      setDialogState(() => salvando = false);
+                      _showSnackBarOriginal("Erro ao atualizar nome.", Colors.redAccent);
+                    }
+                  },
+                  child: salvando 
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                      : const Text("SALVAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  // 🟢 NOVA FUNÇÃO INTELIGENTE DE TROCA DE SENHA
+  Future<void> _solicitarTrocaDeSenha(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null) return;
+
+    // Checa se é usuário do Google
+    bool isGoogle = user.providerData.any((p) => p.providerId == 'google.com');
+
+    if (isGoogle) {
+      _showSnackBarOriginal("Sua conta é vinculada ao Google. A senha deve ser alterada diretamente na sua conta Google.", Colors.orangeAccent);
+      return;
+    }
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: user.email!);
+      
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Row(
+              children: [
+                Icon(Icons.mark_email_read_outlined, color: Color(0xFF00E676)),
+                SizedBox(width: 10),
+                Text("E-mail Enviado!", style: TextStyle(color: Colors.white)),
+              ],
+            ),
+            content: const Text(
+              "Enviamos um link de redefinição para o seu e-mail. Verifique sua caixa de entrada (e o spam) para criar uma nova senha.",
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("ENTENDIDO", style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      _showSnackBarOriginal("Erro ao enviar o e-mail. Tente novamente mais tarde.", Colors.redAccent);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -101,34 +223,38 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 20),
-                  
-                  // 1. HEADER COMPACTO UBER-STYLE
                   Row(
                     children: [
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              nome,
-                              style: const TextStyle(
-                                color: Colors.white, 
-                                fontSize: 26, 
-                                fontWeight: FontWeight.w900, 
-                                letterSpacing: -0.5
-                              ),
-                              overflow: TextOverflow.ellipsis,
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    nome,
+                                    style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -0.5),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                GestureDetector(
+                                  onTap: () => _editarNome(nome),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: BoxDecoration(color: primaryColor.withAlpha(26), borderRadius: BorderRadius.circular(6)), // 🧹 Opacity Limpo
+                                    child: const Icon(Icons.edit_rounded, color: primaryColor, size: 18),
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 4),
-                            // Badge simples de Contratante
                             Row(
                               children: [
                                 const Icon(Icons.verified_user_rounded, color: primaryColor, size: 16),
                                 const SizedBox(width: 4),
-                                const Text(
-                                  "Perfil Contratante",
-                                  style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 13),
-                                ),
+                                const Text("Perfil Contratante", style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 13)),
                               ],
                             ),
                           ],
@@ -138,10 +264,7 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
                       _buildAvatarHorizontal(fotoUrl, nome),
                     ],
                   ),
-
                   const SizedBox(height: 25),
-
-                  // 2. DASHBOARD DE ESTATÍSTICAS (Lado a Lado Compacto)
                   StreamBuilder<Map<String, int>>(
                     stream: _getEstatisticasContratante(user?.uid),
                     builder: (context, statsSnapshot) {
@@ -155,10 +278,7 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
                       );
                     }
                   ),
-
                   const SizedBox(height: 25),
-
-                  // 3. DADOS DA CONTA (Compactados)
                   _buildSecaoCard("DADOS DA CONTA", [
                     _itemSimples(Icons.alternate_email_rounded, "E-mail", email),
                     _divider(),
@@ -166,23 +286,17 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
                     _divider(),
                     _itemSimples(Icons.badge_outlined, "CPF", dados?['cpf'] ?? "Não informado"),
                   ]),
-
                   const SizedBox(height: 15),
-
-                  // 4. CONFIGURAÇÕES
                   _buildSecaoCard("CONFIGURAÇÕES", [
+                    // 🟢 AQUI CHAMAMOS A FUNÇÃO MÁGICA
                     _itemMenuClicavel(Icons.lock_reset_rounded, "Alterar Senha", Colors.amber, () {
-                      if(user?.email != null) {
-                        FirebaseAuth.instance.sendPasswordResetEmail(email: user!.email!);
-                        _showSnackBarOriginal("Link de redefinição enviado para seu e-mail.", Colors.green);
-                      }
+                      _solicitarTrocaDeSenha(context);
                     }),
                     _divider(),
                     _itemMenuClicavel(Icons.logout_rounded, "Sair da Conta", Colors.redAccent, () {
                       FirebaseAuth.instance.signOut();
                     }),
                   ]),
-                  
                   const SizedBox(height: 30),
                   const Center(child: Text("Defende Pra Mim v1.0.0", style: TextStyle(color: Colors.white10, fontSize: 10))),
                   const SizedBox(height: 20),
@@ -195,14 +309,12 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
     );
   }
 
-  // --- WIDGETS AUXILIARES (Mesmo padrão do Goleiro) ---
-
   Widget _buildAvatarHorizontal(String url, String nome) {
     return Stack(
       children: [
         Container(
           padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: primaryColor.withOpacity(0.3), width: 2)),
+          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: primaryColor.withAlpha(76), width: 2)), // 🧹 Opacity Limpo
           child: CircleAvatar(
             radius: 32,
             backgroundColor: bgAvatar,
@@ -227,21 +339,16 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
     );
   }
 
-  // Estatística Achatada com ícone na lateral
   Widget _buildMiniStat(String label, String valor, Color cor, IconData icone) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
+      decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white.withAlpha(13))), // 🧹 Opacity Limpo
       child: Column(
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icone, color: cor.withOpacity(0.7), size: 18),
+              Icon(icone, color: cor.withAlpha(179), size: 18), // 🧹 Opacity Limpo
               const SizedBox(width: 8),
               Text(valor, style: TextStyle(color: cor, fontSize: 24, fontWeight: FontWeight.w900)),
             ],
@@ -262,11 +369,7 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
           child: Text(titulo, style: const TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1)),
         ),
         Container(
-          decoration: BoxDecoration(
-            color: surfaceColor,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withOpacity(0.05)),
-          ),
+          decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withAlpha(13))), // 🧹 Opacity Limpo
           child: Column(children: filhos),
         ),
       ],
@@ -286,7 +389,7 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
     return ListTile(
       onTap: onTap,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: Icon(icon, color: cor.withOpacity(0.8), size: 20),
+      leading: Icon(icon, color: cor.withAlpha(204), size: 20), // 🧹 Opacity Limpo
       title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 14)),
       trailing: const Icon(Icons.chevron_right, color: Colors.white10, size: 18),
     );
@@ -296,8 +399,6 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
 
   void _showSnackBarOriginal(String texto, Color cor) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(texto), backgroundColor: cor, behavior: SnackBarBehavior.floating),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(texto), backgroundColor: cor, behavior: SnackBarBehavior.floating));
   }
 }

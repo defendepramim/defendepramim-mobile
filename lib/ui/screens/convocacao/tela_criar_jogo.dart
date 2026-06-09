@@ -50,8 +50,8 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
   final TextEditingController _cLoc = TextEditingController();
   final TextEditingController _cObs = TextEditingController();
 
-  bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
-  bool get localOk => localSelecionado.isNotEmpty;
+bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
+  bool get localOk => localSelecionado.isNotEmpty && latitudeJogo != null && longitudeJogo != null; // 🟢 TRAVA DE GPS AQUI!
   bool get nivelOk => nivelGoleiro.isNotEmpty;
   bool get tudoPronto => dataOk && localOk && nivelOk;
   double? latitudeJogo;
@@ -480,18 +480,22 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
-      builder: (ctx) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(20),
-            child: Text("Selecione o Nível", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-          ),
-          _opcaoNivel("Várzea (Livre)", _precoVarzea),
-          _opcaoNivel("Intermediário (Médio)", _precoInter),
-          _opcaoNivel("Elite (Master)", _precoElite),
-          const SizedBox(height: 20),
-        ],
+      // 🛡️ useSafeArea: true ajuda em versões mais novas do Flutter
+      useSafeArea: true, 
+      builder: (ctx) => SafeArea( // 🛡️ A ARMADURA PRINCIPAL AQUI
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Text("Selecione o Nível", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
+            _opcaoNivel("Várzea (Livre)", _precoVarzea),
+            _opcaoNivel("Intermediário (Médio)", _precoInter),
+            _opcaoNivel("Elite (Master)", _precoElite),
+            const SizedBox(height: 10), // Pode diminuir pra 10, a SafeArea já dá a margem do sistema!
+          ],
+        ),
       ),
     );
   }
@@ -717,7 +721,10 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
               "duracao": duracaoSelecionada,
               "criadoEm": widget.dados?["criadoEm"] ?? FieldValue.serverTimestamp(), 
               "editadoEm": FieldValue.serverTimestamp(),
-              "latitude": latitudeJogo,
+              
+              // 🟢 AQUI ESTÁ O TRUQUE MESTRE: GeoPoint nativo do Firebase!
+              "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
+              "latitude": latitudeJogo, // Mantemos separados também se você quiser usar no app sem converter
               "longitude": longitudeJogo,
               
               // Carimbando as novas métricas financeiras tierizadas fixas
@@ -735,8 +742,12 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             "nome": nomeQuadraSalvar,      
             "endereco": enderecoRuaSalvar,  
             "observacoes": observacoes,
+            
+            // 🟢 E salvamos no GeoPoint da Quadra sugerida também!
+            "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
             "latitude": latitudeJogo,
             "longitude": longitudeJogo,
+            
             "aprovada": false, 
             "sugeridaPor": uid,
             "criadaEm": FieldValue.serverTimestamp(),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart'; // 🟢 INJETADO AQUI
 import 'tabs_goleiro/aba_buscar_jogos.dart';
 import 'tabs_goleiro/aba_minhas_peladas.dart';
 import 'tabs_goleiro/aba_perfil_goleiro.dart';
@@ -20,6 +21,24 @@ class _HomeGoleiroState extends State<HomeGoleiro> {
     const AbaCarteira(),      
     const AbaPerfilGoleiro(), 
   ];
+
+  // 🟢 MAGIA DAS PERMISSÕES: Roda assim que a tela nasce!
+  @override
+  void initState() {
+    super.initState();
+    _solicitarPermissoesEssenciais();
+  }
+
+  Future<void> _solicitarPermissoesEssenciais() async {
+    // Pede permissão para avisar o goleiro sobre novas convocações ou aprovações
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
+    }
+    // Pede localização para o goleiro buscar jogos próximos a ele
+    if (await Permission.locationWhenInUse.isDenied) {
+      await Permission.locationWhenInUse.request();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

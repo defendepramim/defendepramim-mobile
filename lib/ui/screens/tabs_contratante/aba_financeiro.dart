@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 class AbaFinanceiroContratante extends StatelessWidget {
   const AbaFinanceiroContratante({super.key});
 
-  // --- RECARGA BLINDADA ---
   Future<void> _adicionarSaldoTeste(BuildContext context) async {
     final TextEditingController valorRecargaController = TextEditingController();
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -49,17 +48,15 @@ class AbaFinanceiroContratante extends StatelessWidget {
                   double saldoAtual = (userSnap.get('saldo') ?? 0.0).toDouble();
                   double novoSaldo = saldoAtual + valor;
 
-                  // Atualiza o saldo principal
                   transaction.update(userRef, {'saldo': novoSaldo});
 
-                  // Cria o registro detalhado no extrato
                   transaction.set(extratoRef, {
                     'id': extratoRef.id,
                     'tipo': 'entrada',
                     'descricao': 'Recarga de Saldo (Teste)',
                     'valor': valor,
                     'saldoAnterior': saldoAtual,
-                    'saldoAtual': novoSaldo, // <--- Importante para conferência
+                    'saldoAtual': novoSaldo, 
                     'data': FieldValue.serverTimestamp(),
                     'categoria': 'recarga'
                   });
@@ -125,7 +122,7 @@ class AbaFinanceiroContratante extends StatelessWidget {
                   
                   final docs = snapshot.data?.docs ?? [];
                   if (docs.isEmpty) {
-                      return _buildEmptyState(); // Chama o novo visual
+                      return _buildEmptyState(); 
                   }
 
                   return SliverList(
@@ -156,11 +153,11 @@ class AbaFinanceiroContratante extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         gradient: LinearGradient(
-          colors: [primary.withOpacity(0.2), Colors.white.withOpacity(0.05)],
+          colors: [primary.withAlpha(51), Colors.white.withAlpha(13)], // Antigo: 0.2 e 0.05
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
+        border: Border.all(color: Colors.white.withAlpha(26)), // Antigo: 0.1
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -168,8 +165,8 @@ class AbaFinanceiroContratante extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("SALDO TOTAL", style: TextStyle(color: primary.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-              Icon(Icons.account_balance_wallet_outlined, color: primary.withOpacity(0.5)),
+              Text("SALDO TOTAL", style: TextStyle(color: primary.withAlpha(204), fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2)), // Antigo: 0.8
+              Icon(Icons.account_balance_wallet_outlined, color: primary.withAlpha(128)), // Antigo: 0.5
             ],
           ),
           const SizedBox(height: 12),
@@ -202,7 +199,6 @@ class AbaFinanceiroContratante extends StatelessWidget {
     final String tipo = data['tipo'] ?? 'saida';
     final double valor = (data['valor'] ?? 0.0).toDouble();
     
-    // Configuração por tipo de transação
     IconData icon;
     Color color;
     String prefix;
@@ -242,7 +238,7 @@ class AbaFinanceiroContratante extends StatelessWidget {
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: color.withOpacity(0.1), shape: BoxShape.circle),
+            decoration: BoxDecoration(color: color.withAlpha(26), shape: BoxShape.circle), // Antigo: 0.1
             child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(width: 16),
@@ -275,20 +271,20 @@ class AbaFinanceiroContratante extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.03),
+                color: Colors.white.withAlpha(8), // Antigo: 0.03
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.history_toggle_off_rounded,
                 size: 60,
-                color: Colors.white.withOpacity(0.1),
+                color: Colors.white.withAlpha(26), // Antigo: 0.1
               ),
             ),
             const SizedBox(height: 16),
             Text(
               "NENHUMA MOVIMENTAÇÃO",
               style: TextStyle(
-                color: Colors.white.withOpacity(0.2),
+                color: Colors.white.withAlpha(51), // Antigo: 0.2
                 fontSize: 14,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 1.5,
@@ -298,7 +294,7 @@ class AbaFinanceiroContratante extends StatelessWidget {
             Text(
               "Suas entradas e saídas aparecerão aqui.",
               style: TextStyle(
-                color: Colors.white.withOpacity(0.1),
+                color: Colors.white.withAlpha(26), // Antigo: 0.1
                 fontSize: 12,
               ),
             ),

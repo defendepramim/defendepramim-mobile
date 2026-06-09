@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:permission_handler/permission_handler.dart'; // 🟢 Pacote de permissões
 
 class AbaPerfilGoleiro extends StatefulWidget {
   const AbaPerfilGoleiro({super.key});
@@ -19,6 +20,11 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
   static const primaryColor = Color(0xFF00E676);
   static const surfaceColor = Color(0xFF121212);
   static const bgAvatar = Color(0xFF1E1E1E);
+
+  @override
+  void initState() {
+    super.initState();
+  }
 
   Future<void> _pickAndUploadImage() async {
     final picker = ImagePicker();
@@ -42,6 +48,125 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
       debugPrint("Erro no upload: $e");
     } finally {
       if (mounted) setState(() => _carregandoFoto = false);
+    }
+  }
+
+  // ✏️ NOVA FUNÇÃO: EDITAR O NOME DO GOLEIRO
+  Future<void> _editarNome(String nomeAtual) async {
+    final controller = TextEditingController(text: nomeAtual);
+    final formKey = GlobalKey<FormState>();
+    bool salvando = false;
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: surfaceColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: primaryColor, width: 0.5),
+              ),
+              title: const Text("Como prefere ser chamado?", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              content: Form(
+                key: formKey,
+                child: TextFormField(
+                  controller: controller,
+                  style: const TextStyle(color: Colors.white),
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    labelText: "Seu Nome Completo",
+                    labelStyle: const TextStyle(color: Colors.white54),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.white24)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: primaryColor)),
+                  ),
+                  validator: (v) => v!.trim().isEmpty ? "O nome não pode ser vazio" : null,
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: salvando ? null : () => Navigator.pop(context),
+                  child: const Text("CANCELAR", style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: primaryColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  onPressed: salvando ? null : () async {
+                    if (!formKey.currentState!.validate()) return;
+                    setDialogState(() => salvando = true);
+                    try {
+                      final user = FirebaseAuth.instance.currentUser;
+                      if (user != null) {
+                        await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).update({
+                          'nome': controller.text.trim(),
+                          'nomeBusca': controller.text.trim().toLowerCase(),
+                        });
+                        if (mounted) {
+                          Navigator.pop(context);
+                          _showSnackBarOriginal("Nome atualizado com sucesso!", Colors.green);
+                        }
+                      }
+                    } catch (e) {
+                      setDialogState(() => salvando = false);
+                      _showSnackBarOriginal("Erro ao atualizar nome.", Colors.redAccent);
+                    }
+                  },
+                  child: salvando 
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                      : const Text("SALVAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          }
+        );
+      }
+    );
+  }
+
+  // 🟢 NOVA FUNÇÃO INTELIGENTE DE TROCA DE SENHA
+  Future<void> _solicitarTrocaDeSenha(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null) return;
+
+    // Checa se é usuário do Google
+    bool isGoogle = user.providerData.any((p) => p.providerId == 'google.com');
+
+    if (isGoogle) {
+      _showSnackBarOriginal("Sua conta é vinculada ao Google. A senha deve ser alterada diretamente na sua conta Google.", Colors.orangeAccent);
+      return;
+    }
+
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: user.email!);
+      
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Row(
+              children: [
+                Icon(Icons.mark_email_read_outlined, color: Color(0xFF00E676)),
+                SizedBox(width: 10),
+                Text("E-mail Enviado!", style: TextStyle(color: Colors.white)),
+              ],
+            ),
+            content: const Text(
+              "Enviamos um link de redefinição para o seu e-mail. Verifique sua caixa de entrada (e o spam) para criar uma nova senha.",
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("ENTENDIDO", style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      _showSnackBarOriginal("Erro ao enviar o e-mail. Tente novamente mais tarde.", Colors.redAccent);
     }
   }
 
@@ -77,18 +202,31 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 20),
-                  
-                  // 🟢 TOPO UBER: Compacto e direto ao ponto
                   Row(
                     children: [
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              nome,
-                              style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -0.5),
-                              overflow: TextOverflow.ellipsis,
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    nome,
+                                    style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: -0.5),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                GestureDetector(
+                                  onTap: () => _editarNome(nome),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: BoxDecoration(color: primaryColor.withAlpha(26), borderRadius: BorderRadius.circular(6)), // 🧹 Opacity Limpo
+                                    child: const Icon(Icons.edit_rounded, color: primaryColor, size: 18),
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 4),
                             Row(
@@ -112,15 +250,9 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
                       _buildAvatarHorizontal(fotoUrl, nome),
                     ],
                   ),
-
                   const SizedBox(height: 25),
-
-                  // 🟢 OS CARDS BONITOS VOLTARAM!
                   _buildDashboardGoleiro(totalGanhos, atuadas, faltas),
-
                   const SizedBox(height: 25),
-
-                  // DADOS DA CONTA (Achatados visualmente)
                   _buildSecaoCard("DADOS DA CONTA", [
                     _itemSimples(Icons.alternate_email_rounded, "E-mail", email),
                     _divider(),
@@ -128,22 +260,17 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
                     _divider(),
                     _itemSimples(Icons.badge_outlined, "CPF", dados?['cpf'] ?? "---"),
                   ]),
-
                   const SizedBox(height: 15),
-
                   _buildSecaoCard("CONFIGURAÇÕES", [
+                    // 🟢 AQUI CHAMAMOS A FUNÇÃO MÁGICA
                     _itemMenuClicavel(Icons.lock_reset_rounded, "Alterar Senha", Colors.amber, () {
-                      if(user?.email != null) {
-                        FirebaseAuth.instance.sendPasswordResetEmail(email: user!.email!);
-                        _showSnackBarOriginal("Link enviado para seu e-mail!", Colors.green);
-                      }
+                      _solicitarTrocaDeSenha(context);
                     }),
                     _divider(),
                     _itemMenuClicavel(Icons.logout_rounded, "Sair da Conta", Colors.redAccent, () {
                       FirebaseAuth.instance.signOut();
                     }),
                   ]),
-                  
                   const SizedBox(height: 30),
                   const Center(child: Text("Defende Pra Mim v1.0.0", style: TextStyle(color: Colors.white10, fontSize: 10))),
                   const SizedBox(height: 20),
@@ -156,19 +283,17 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
     );
   }
 
-  // --- WIDGETS AUXILIARES ---
-
   Widget _buildAvatarHorizontal(String url, String nome) {
     return Stack(
       children: [
         Container(
           padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: primaryColor.withOpacity(0.3), width: 2)),
+          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: primaryColor.withAlpha(76), width: 2)), // 🧹 Opacity Limpo
           child: CircleAvatar(
             radius: 32,
             backgroundColor: bgAvatar,
             backgroundImage: url != "" ? NetworkImage(url) : null,
-            child: url == "" ? Text(nome[0], style: const TextStyle(fontSize: 24, color: primaryColor, fontWeight: FontWeight.bold)) : null,
+            child: url == "" ? Text(nome[0].toUpperCase(), style: const TextStyle(fontSize: 24, color: primaryColor, fontWeight: FontWeight.bold)) : null,
           ),
         ),
         if (_carregandoFoto) const CircleAvatar(radius: 32, backgroundColor: Colors.black54, child: CircularProgressIndicator(color: primaryColor, strokeWidth: 2)),
@@ -191,15 +316,10 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
   Widget _buildDashboardGoleiro(double ganhos, int partidas, int faltas) {
     return Column(
       children: [
-        // Card de Ganhos em destaque (Largo e imponente)
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: surfaceColor,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.white.withOpacity(0.05)),
-          ),
+          decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withAlpha(13))), // 🧹 Opacity Limpo
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -213,14 +333,13 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
               ),
               Container(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: primaryColor.withOpacity(0.1), shape: BoxShape.circle),
+                decoration: BoxDecoration(color: primaryColor.withAlpha(26), shape: BoxShape.circle), // 🧹 Opacity Limpo
                 child: const Icon(Icons.monetization_on_rounded, color: primaryColor, size: 28),
               ),
             ],
           ),
         ),
         const SizedBox(height: 10),
-        // Mini cards de suporte bonitões
         Row(
           children: [
             Expanded(child: _buildMiniStat("PARTIDAS", partidas.toString(), Colors.blueAccent, Icons.sports_soccer)),
@@ -232,22 +351,16 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
     );
   }
 
-Widget _buildMiniStat(String label, String valor, Color cor, IconData icone) {
+  Widget _buildMiniStat(String label, String valor, Color cor, IconData icone) {
     return Container(
-      // Diminuímos um pouco o padding vertical
       padding: const EdgeInsets.symmetric(vertical: 12), 
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
+      decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(15), border: Border.all(color: Colors.white.withAlpha(13))), // 🧹 Opacity Limpo
       child: Column(
         children: [
-          // Ícone e Número agora dividem a mesma linha
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icone, color: cor.withOpacity(0.7), size: 18),
+              Icon(icone, color: cor.withAlpha(179), size: 18), // 🧹 Opacity Limpo
               const SizedBox(width: 8),
               Text(valor, style: TextStyle(color: cor, fontSize: 24, fontWeight: FontWeight.w900)),
             ],
@@ -268,20 +381,15 @@ Widget _buildMiniStat(String label, String valor, Color cor, IconData icone) {
           child: Text(titulo, style: const TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1)),
         ),
         Container(
-          decoration: BoxDecoration(
-            color: surfaceColor,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withOpacity(0.05)),
-          ),
+          decoration: BoxDecoration(color: surfaceColor, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withAlpha(13))), // 🧹 Opacity Limpo
           child: Column(children: filhos),
         ),
       ],
     );
   }
 
-Widget _itemSimples(dynamic icon, String label, String info) {
+  Widget _itemSimples(dynamic icon, String label, String info) {
     return ListTile(
-      // Tiramos o "visualDensity" negativo que estava esmagando os itens
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       leading: icon is IconData ? Icon(icon, color: Colors.white24, size: 20) : FaIcon(icon as FaIconData, color: Colors.white24, size: 18),
       title: Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11)),
@@ -293,7 +401,7 @@ Widget _itemSimples(dynamic icon, String label, String info) {
     return ListTile(
       onTap: onTap,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: Icon(icon, color: cor.withOpacity(0.8), size: 20),
+      leading: Icon(icon, color: cor.withAlpha(204), size: 20), // 🧹 Opacity Limpo
       title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 14)),
       trailing: const Icon(Icons.chevron_right, color: Colors.white10, size: 18),
     );
@@ -303,8 +411,6 @@ Widget _itemSimples(dynamic icon, String label, String info) {
 
   void _showSnackBarOriginal(String texto, Color cor) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(texto), backgroundColor: cor, behavior: SnackBarBehavior.floating),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(texto), backgroundColor: cor, behavior: SnackBarBehavior.floating));
   }
 }

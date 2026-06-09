@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // 🟢 IMPORT ADICIONADO PARA LER O BANCO
 import 'package:flutter/services.dart';
 import '../widgets/campo_input.dart';
 
@@ -36,19 +37,40 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// 🛡️ LÓGICA: RECUPERAR SENHA
+  /// 🛡️ LÓGICA: RECUPERAR SENHA (COM VERIFICAÇÃO INTELIGENTE)
   Future<void> _recuperarSenha() async {
-    final email = _emailController.text.trim();
+    final email = _emailController.text.trim().toLowerCase();
     if (email.isEmpty) {
       _mostrarMensagem("Digite seu e-mail para receber o link de recuperação.");
       return;
     }
 
+    setState(() => _carregando = true);
+    FocusManager.instance.primaryFocus?.unfocus(); // Baixa o teclado
+
     try {
+      // 1. Vai no nosso banco e verifica se existe algum usuário com esse e-mail
+      final userQuery = await FirebaseFirestore.instance
+          .collection('usuarios')
+          .where('email', isEqualTo: email)
+          .limit(1)
+          .get();
+
+      // 2. Se a lista voltar vazia, o e-mail não existe no app!
+      if (userQuery.docs.isEmpty) {
+        _mostrarMensagem("Este e-mail não está cadastrado no sistema.");
+        setState(() => _carregando = false);
+        return;
+      }
+
+      // 3. Se existe, aí sim a gente manda o link oficial do Firebase
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
       _mostrarMensagem("Link enviado! Verifique sua caixa de entrada.", erro: false);
+      
     } catch (e) {
-      _mostrarMensagem("Erro ao enviar e-mail. Verifique o endereço.");
+      _mostrarMensagem("Erro ao processar solicitação. Tente novamente mais tarde.");
+    } finally {
+      if (mounted) setState(() => _carregando = false);
     }
   }
 
@@ -68,14 +90,51 @@ class _LoginScreenState extends State<LoginScreen> {
     FocusManager.instance.primaryFocus?.unfocus(); 
 
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final userCred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
         password: senha,
       );
 
-      if (mounted) {
-        Navigator.pop(context);
+      final user = userCred.user;
+
+      // 🟢 A PORTA GIRATÓRIA DA SEGURANÇA: Verifica se o e-mail foi validado
+      if (user != null && !user.emailVerified) {
+        // O e-mail não foi verificado ainda!
+        await FirebaseAuth.instance.signOut(); // Desloga o teimoso na hora
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text("Você precisa verificar seu e-mail antes de entrar."),
+              backgroundColor: Colors.orangeAccent,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'REENVIAR E-MAIL',
+                textColor: Colors.black,
+                backgroundColor: const Color(0xFF00E676),
+                onPressed: () async {
+                  try {
+                     final tempUser = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: senha);
+                     await tempUser.user!.sendEmailVerification();
+                     await FirebaseAuth.instance.signOut();
+                     _mostrarMensagem("Novo link enviado! Olhe o spam.", erro: false);
+                  } catch (e) {
+                     _mostrarMensagem("Erro ao reenviar. Tente novamente mais tarde.");
+                  }
+                },
+              ),
+            ),
+          );
+        }
+        return; // Interrompe o login e não deixa passar pra Home!
       }
+
+      // Se passou pela porta giratória (e-mail tá ok), vai pra Home!
+      if (mounted) {
+        Navigator.pop(context); // Fecha a tela de login
+      }
+      
     } on FirebaseAuthException catch (e) {
       String mensagem = "E-mail ou senha incorretos.";
       if (e.code == 'user-disabled') mensagem = "Conta desativada.";
@@ -95,7 +154,6 @@ class _LoginScreenState extends State<LoginScreen> {
     
     // ✨ CORREÇÃO DE PERFORMANCE AQUI: 
     // Usamos a LARGURA da tela em vez da altura. 
-    // Quando o teclado sobe, a largura continua a mesma, então o Flutter NÃO recalcula e não engasga a animação!
     final double logoSize = MediaQuery.of(context).size.width * 0.45; 
     
     return Scaffold(
@@ -110,11 +168,13 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       ),
       body: SafeArea(
-        // ✨ CORREÇÃO DE PERFORMANCE: O HitTestBehavior.translucent otimiza os toques na tela
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
           child: SingleChildScrollView(
+            // 🚀 MÁGICA DE PERFORMANCE: ClampingScrollPhysics impede que o Android tente
+            // calcular o efeito elástico invisível quando o teclado "esmaga" a tela.
+            physics: const ClampingScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 28),
             child: Column(
               children: [
@@ -122,12 +182,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 Hero(
                   tag: 'logo', 
                   child: SizedBox(
-                    height: logoSize, // Altura estática blindada contra o teclado
+                    height: logoSize, 
                     width: logoSize,
                     child: Image.asset(
                       "assets/logo.png",
                       fit: BoxFit.contain,
-                      cacheHeight: 400, // Excelente manter isso!
+                      cacheHeight: 400, 
                       errorBuilder: (context, error, stackTrace) => 
                         const Icon(Icons.sports_soccer, size: 140, color: primaryNeon),
                     ),
@@ -198,7 +258,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: primaryNeon,
                       foregroundColor: Colors.black,
-                      disabledBackgroundColor: primaryNeon.withOpacity(0.3),
+                      disabledBackgroundColor: primaryNeon.withAlpha(76),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                       elevation: 0,
                     ),

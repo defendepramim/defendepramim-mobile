@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart'; // 🟢 INJETADO AQUI
 import 'tabs_contratante/aba_meus_jogos.dart';
 import 'tabs_contratante/aba_financeiro.dart';
 import 'tabs_contratante/aba_perfil.dart';
@@ -18,6 +19,24 @@ class _HomeContratanteState extends State<HomeContratante> {
   final Color primaryColor = const Color(0xFF00E676);
   final Color backgroundColor = const Color(0xFF121212);
   final Color surfaceColor = const Color(0xFF1E1E1E);
+
+  // 🟢 MAGIA DAS PERMISSÕES: Roda assim que a tela nasce!
+  @override
+  void initState() {
+    super.initState();
+    _solicitarPermissoesEssenciais();
+  }
+
+  Future<void> _solicitarPermissoesEssenciais() async {
+    // Pede permissão para avisar o contratante quando um goleiro aceitar o jogo
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
+    }
+    // Pede localização para o mapa dos jogos
+    if (await Permission.locationWhenInUse.isDenied) {
+      await Permission.locationWhenInUse.request();
+    }
+  }
 
   void _alternarCriacao(bool exibir) {
     setState(() {

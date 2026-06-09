@@ -4,7 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:defendepramim/services/push_notification_service.dart'; // Ajuste o caminho se necessário
+import 'package:defendepramim/services/push_notification_service.dart';
+import 'package:url_launcher/url_launcher.dart'; // 🟢 INJETADO PARA ABRIR O MAPA
+import 'package:defendepramim/ui/widgets/card_agenda_goleiro.dart';
+import 'package:defendepramim/ui/widgets/card_historico_goleiro.dart';
 
 class AbaMinhasPeladas extends StatefulWidget {
   const AbaMinhasPeladas({super.key});
@@ -68,83 +71,8 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
 
   DateTime _obterHoraRealAgora() => DateTime.now().add(_diferencaServidor);
 
-  // --- 🤖 ROBÔ DESCENTRALIZADO: AUTO-PAGAMENTO PELO APP DO GOLEIRO ---
-  bool _verificandoPagamentos = false;
 
-  Future<void> _cacadorDePagamentosAtrasados(List<QueryDocumentSnapshot> docs) async {
-    if (_verificandoPagamentos) return;
-    _verificandoPagamentos = true;
-
-    final agora = _obterHoraRealAgora();
-
-    for (var doc in docs) {
-      final dados = doc.data() as Map<String, dynamic>;
-      
-      // Só olha para jogos que o goleiro jogou e estão travados no 'fechado'
-      if (dados['status'] == 'fechado') {
-        final dt = (dados['dataHora'] as Timestamp).toDate();
-        final duracao = dados['duracao'] ?? 60;
-        final limitePagamento = dt.add(Duration(minutes: duracao)).add(const Duration(hours: 12));
-
-        // Se já passou das 12h, o app do goleiro força a transação!
-        if (agora.isAfter(limitePagamento)) {
-          await _forcarPagamentoAutomaticoGoleiro(doc.id);
-        }
-      }
-    }
-    _verificandoPagamentos = false;
-  }
-
-  Future<void> _forcarPagamentoAutomaticoGoleiro(String idJogo) async {
-    try {
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        DocumentReference jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
-        DocumentSnapshot jogoSnap = await transaction.get(jogoRef);
-
-        if (!jogoSnap.exists) return;
-        final dadosAtuais = jogoSnap.data() as Map<String, dynamic>;
-
-        // 🛡️ TRAVA DE SEGURANÇA ABSOLUTA: 
-        // Se o contratante pagou um milissegundo antes, o status não é mais 'fechado'. O app aborta para não pagar dobrado.
-        if (dadosAtuais['status'] != 'fechado') return;
-
-        final double valorGoleiro = (dadosAtuais['valor'] ?? 0.0).toDouble();
-        final String idGoleiro = dadosAtuais['idGoleiro'];
-
-        DocumentReference goleiroRef = FirebaseFirestore.instance.collection("usuarios").doc(idGoleiro);
-
-        // 1. Finaliza o jogo
-        transaction.update(jogoRef, {
-          "status": "finalizado",
-          "pagoEm": FieldValue.serverTimestamp(),
-          "finalizadoAutomaticamente": true 
-        });
-
-        // 2. Coloca o dinheiro no bolso do goleiro
-        transaction.update(goleiroRef, {
-          "saldo": FieldValue.increment(valorGoleiro),
-          "atuadas": FieldValue.increment(1) // ✨ Redundância 2: O próprio goleiro resgatou após 12h
-        });
-
-        // 3. Gera o extrato de recebimento
-        DocumentReference extratoGoleiro = goleiroRef.collection('extrato').doc();
-        transaction.set(extratoGoleiro, {
-          "id": extratoGoleiro.id,
-          "tipo": "recebimento",
-          "valor": valorGoleiro,
-          "data": FieldValue.serverTimestamp(),
-          "descricao": "Pelada: ${dadosAtuais['local']}",
-          "idJogo": idJogo,
-          "status": "concluido"
-        });
-      });
-      
-      debugPrint("🤖 Robô do Goleiro ativou e resgatou o dinheiro do jogo $idJogo!");
-    } catch (e) {
-      debugPrint("Erro no auto-pagamento pelo lado do goleiro: $e");
-    }
-  }
-
+  
   String _formatarTempoRestante(DateTime dataJogo, int duracao) {
     final agora = _obterHoraRealAgora();
     final fim = dataJogo.add(Duration(minutes: duracao));
@@ -481,6 +409,31 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
     );
   }
 
+  // 🏭 FÁBRICA DE CARDS DA AGENDA (Calcula a hora certa e chama o arquivo externo)
+  Widget _gerarCardAgenda(QueryDocumentSnapshot doc, String categoria) {
+    final jogo = doc.data() as Map<String, dynamic>;
+    final dtAbsoluta = (jogo['dataHora'] as Timestamp).toDate();
+    
+    DateTime dataAlvoReal;
+    try {
+      final partesData = (jogo['dataExibicao'] ?? "").split('/');
+      final partesHora = (jogo['horaExibicao'] ?? "").split(':');
+      dataAlvoReal = DateTime(dtAbsoluta.year, int.parse(partesData[1]), int.parse(partesData[0]), int.parse(partesHora[0]), int.parse(partesHora[1]));
+    } catch (e) {
+      dataAlvoReal = dtAbsoluta;
+    }
+
+    return CardAgendaGoleiro(
+      id: doc.id,
+      jogo: jogo,
+      cat: categoria,
+      tempoRestante: _formatarTempoRestante(dataAlvoReal, jogo['duracao'] ?? 60),
+      onAceitarContestacao: () => _aceitarContestacao(doc.id),
+      onDefenderContestacao: () => _abrirModalDefesa(doc.id),
+      onDesistirPartida: () => _dialogoDesistencia(doc.id, dataAlvoReal),
+    );
+  }
+
   // --- ABA 1: AGENDA ---
   Widget _buildAbaAgenda() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -544,48 +497,24 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
                 color: Color(0xFF00E676),
                 backgroundColor: Colors.transparent,
               ),
-
             if (acontecendo.isNotEmpty) ...[
               _headerSection("ROLANDO AGORA ⚽", primaryColor),
-              ...acontecendo.map(
-                (d) => _buildCardIdentico(
-                  d.id,
-                  d.data() as Map<String, dynamic>,
-                  "ao_vivo",
-                ),
-              ),
+              ...acontecendo.map((d) => _gerarCardAgenda(d, "ao_vivo")),
             ],
 
             if (cancelados.isNotEmpty) ...[
               _headerSection("AVISOS DE CANCELAMENTO 📢", Colors.redAccent),
-              ...cancelados.map(
-                (d) => _buildCardCancelado(d.id, d.data() as Map<String, dynamic>),
-              ),
+              ...cancelados.map((d) => _buildCardCancelado(d.id, d.data() as Map<String, dynamic>)),
             ],
 
             if (emAnalise.isNotEmpty) ...[
-              _headerSection(
-                "PENDÊNCIAS / CONTESTAÇÕES ⚠️",
-                Colors.orangeAccent,
-              ),
-              ...emAnalise.map(
-                (d) => _buildCardIdentico(
-                  d.id,
-                  d.data() as Map<String, dynamic>,
-                  "analise",
-                ),
-              ),
+              _headerSection("PENDÊNCIAS / CONTESTAÇÕES ⚠️", Colors.orangeAccent),
+              ...emAnalise.map((d) => _gerarCardAgenda(d, "analise")),
             ],
 
             if (proximos.isNotEmpty) ...[
               _headerSection("PRÓXIMOS JOGOS", Colors.blueAccent),
-              ...proximos.map(
-                (d) => _buildCardIdentico(
-                  d.id,
-                  d.data() as Map<String, dynamic>,
-                  "agenda",
-                ),
-              ),
+              ...proximos.map((d) => _gerarCardAgenda(d, "agenda")),
             ],
 
             const SizedBox(height: 100),
@@ -606,10 +535,6 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
         .snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-
-        // ✨ O PULO DO GATO ACONTECE AQUI:
-        // Assim que os dados chegam, soltamos o robô para caçar atrasos ANTES de montar a tela!
-        _cacadorDePagamentosAtrasados(snapshot.data!.docs);
 
         final historico = snapshot.data!.docs.where((d) {
           final data = d.data() as Map<String, dynamic>;
@@ -652,164 +577,20 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
           itemCount: historico.length,
           itemBuilder: (context, index) {
             final jogo = historico[index].data() as Map<String, dynamic>;
-            return _buildCardHistorico(jogo);
+            final agora = _obterHoraRealAgora(); // 🟢 Pega a hora atual do estado
+            
+            // 🟢 Chama o novo arquivo!
+            return CardHistoricoGoleiro(
+              jogo: jogo,
+              agora: agora, 
+            );
           },
         );
       },
     );
   }
 
-  Widget _buildCardHistorico(Map<String, dynamic> jogo) {
-    final agora = _obterHoraRealAgora();
-    final DateTime dtAbsoluta = (jogo['dataHora'] as Timestamp).toDate();
-    final int duracao = jogo['duracao'] ?? 60;
-    
-    // ✨ Pega as Strings blindadas
-    final String dataExibicao = jogo['dataExibicao'] ?? "${dtAbsoluta.day.toString().padLeft(2, '0')}/${dtAbsoluta.month.toString().padLeft(2, '0')}";
-    final String horaExibicao = jogo['horaExibicao'] ?? "${dtAbsoluta.hour.toString().padLeft(2, '0')}:${dtAbsoluta.minute.toString().padLeft(2, '0')}";
-
-    // ✨ Reconstruir o relógio
-    DateTime dataAlvoReal;
-    try {
-      final partesData = dataExibicao.split('/');
-      final partesHora = horaExibicao.split(':');
-      dataAlvoReal = DateTime(
-        dtAbsoluta.year,
-        int.parse(partesData[1]),
-        int.parse(partesData[0]),
-        int.parse(partesHora[0]),
-        int.parse(partesHora[1]),
-      );
-    } catch (e) {
-      dataAlvoReal = dtAbsoluta;
-    }
-
-    final DateTime fimPartida = dataAlvoReal.add(Duration(minutes: duracao));
-    
-    // --- Lógica de Status Core ---
-    final String status = jogo['status'] ?? '';
-    final Map<String, dynamic>? contestacao = jogo['contestacao'] as Map<String, dynamic>?;
-    final String statusMediacao = contestacao?['statusMediacao'] ?? '';
-    
-    // Estados da Partida
-    final bool isContestacaoAceita = status == 'contestado_aceito' || statusMediacao == 'resolvido_goleiro_aceitou';
-    final bool isContestadoPendente = status == 'contestado' && statusMediacao == 'aguardando_goleiro';
-    final bool emAnaliseSuporte = statusMediacao == 'em_analise_suporte';
-    final bool foiCancelado = status == 'cancelado' && !isContestacaoAceita;
-    final bool pendenteLiberacao = status == 'fechado' && agora.isAfter(fimPartida);
-
-    // --- Definição Visual ---
-    Color corStatus;
-    IconData iconeStatus;
-    String rotuloStatus;
-    String? subTexto;
-
-    if (isContestacaoAceita) {
-      corStatus = Colors.purpleAccent; 
-      iconeStatus = Icons.assignment_return_rounded;
-      rotuloStatus = "CONTESTAÇÃO ACEITA";
-      subTexto = "Você aceitou a contestação.";
-    } else if (isContestadoPendente || emAnaliseSuporte) {
-      corStatus = Colors.orangeAccent;
-      iconeStatus = Icons.gavel_rounded;
-      rotuloStatus = emAnaliseSuporte ? "EM ANÁLISE" : "CONTESTADO";
-      subTexto = emAnaliseSuporte ? "Suporte decidindo..." : "Aguardando sua defesa.";
-    } else if (foiCancelado) {
-      corStatus = Colors.redAccent;
-      iconeStatus = Icons.block_flipped;
-      rotuloStatus = "CANCELADO";
-      subTexto = "Partida não realizada.";
-    } else if (pendenteLiberacao) {
-      corStatus = Colors.orangeAccent;
-      iconeStatus = Icons.timer_outlined;
-      rotuloStatus = "PROCESSANDO";
-      final diff = fimPartida.add(const Duration(hours: 12)).difference(agora);
-      subTexto = diff.isNegative ? "Liberando saldo..." : "Libera em ${diff.inHours}h ${diff.inMinutes % 60}m";
-    } else {
-      corStatus = primaryColor;
-      iconeStatus = Icons.check_circle_outline;
-      rotuloStatus = "CONCLUÍDO";
-      // ✨ AQUI: Mostrando a string fixa no histórico!
-      subTexto = "$dataExibicao às $horaExibicao";
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: (isContestacaoAceita || isContestadoPendente) 
-              ? corStatus.withOpacity(0.3) 
-              : Colors.white.withOpacity(0.05)
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: corStatus.withOpacity(0.1),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(iconeStatus, color: corStatus, size: 20),
-          ),
-          const SizedBox(width: 15),
-          
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  jogo['local'] ?? 'Arena',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subTexto,
-                  style: TextStyle(
-                    color: (isContestacaoAceita || isContestadoPendente) ? corStatus : Colors.white54, 
-                    fontSize: 11, 
-                    fontWeight: (isContestacaoAceita || isContestadoPendente) ? FontWeight.bold : FontWeight.normal
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                "R\$ ${jogo['valor']}",
-                style: TextStyle(
-                  color: (foiCancelado || isContestacaoAceita) ? Colors.white24 : Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  decoration: (foiCancelado || isContestacaoAceita) ? TextDecoration.lineThrough : null,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: corStatus.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  rotuloStatus,
-                  style: TextStyle(color: corStatus, fontSize: 9, fontWeight: FontWeight.w900),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCardCancelado(String id, Map<String, dynamic> jogo) {
+    Widget _buildCardCancelado(String id, Map<String, dynamic> jogo) {
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       padding: const EdgeInsets.all(16),
@@ -905,220 +686,4 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
     ),
   );
 
-  Widget _buildCardIdentico(String id, Map<String, dynamic> jogo, String cat) {
-    // 1. Pega o Timestamp antigo só para garantir o ano
-    final DateTime dtAbsoluta = (jogo['dataHora'] as Timestamp).toDate();
-    final String status = jogo['status'] ?? '';
-    final bool isContestado = status == 'contestado';
-    final String statusMediacao = jogo['contestacao']?['statusMediacao'] ?? '';
-
-    // ✨ 2. Pega as Strings blindadas
-    final String dataExibicao = jogo['dataExibicao'] ?? "${dtAbsoluta.day.toString().padLeft(2, '0')}/${dtAbsoluta.month.toString().padLeft(2, '0')}";
-    final String horaExibicao = jogo['horaExibicao'] ?? "${dtAbsoluta.hour.toString().padLeft(2, '0')}:${dtAbsoluta.minute.toString().padLeft(2, '0')}";
-
-    // ✨ 3. Reconstruir o relógio
-    DateTime dataAlvoReal;
-    try {
-      final partesData = dataExibicao.split('/');
-      final partesHora = horaExibicao.split(':');
-      dataAlvoReal = DateTime(
-        dtAbsoluta.year,
-        int.parse(partesData[1]),
-        int.parse(partesData[0]),
-        int.parse(partesHora[0]),
-        int.parse(partesHora[1]),
-      );
-    } catch (e) {
-      dataAlvoReal = dtAbsoluta;
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: isContestado
-              ? Colors.redAccent.withOpacity(0.4)
-              : Colors.white.withOpacity(0.05),
-        ),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: Column(
-          children: [
-            if (isContestado)
-              Container(
-                width: double.infinity,
-                color: Colors.redAccent,
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: const Text(
-                  "PARTIDA EM CONTESTAÇÃO",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 10,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          jogo['local'] ?? 'Arena',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            "R\$ ${jogo['valor']}",
-                            style: TextStyle(
-                              color: isContestado
-                                  ? Colors.white38
-                                  : primaryColor,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 20,
-                            ),
-                          ),
-                          if (isContestado)
-                            const Text(
-                              "RETIDO",
-                              style: TextStyle(
-                                color: Colors.redAccent,
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 15),
-                  if (isContestado) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.03),
-                        borderRadius: BorderRadius.circular(15),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            "O CONTRATANTE ALEGOU:",
-                            style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            "${jogo['contestacao']?['motivo']}",
-                            style: const TextStyle(color: Colors.white70, fontSize: 13, fontStyle: FontStyle.italic),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    if (statusMediacao == 'aguardando_goleiro')
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => _aceitarContestacao(id),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: Colors.white60,
-                                side: const BorderSide(color: Colors.white12),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              ),
-                              child: const Text("ACEITAR", style: TextStyle(fontSize: 11)),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => _abrirModalDefesa(id),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.redAccent,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              ),
-                              child: const Text("DEFENDER", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      const Center(
-                        child: Text("⏳ EM ANÁLISE PELO SUPORTE", style: TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                      ),
-                  ] else ...[
-                    Row(
-                      children: [
-                        // ✨ AQUI: Usando a data correta no cronômetro
-                        _infoBadge(
-                          Icons.access_time,
-                          _formatarTempoRestante(dataAlvoReal, jogo['duracao'] ?? 60),
-                          cat == "ao_vivo" ? primaryColor : Colors.grey,
-                        ),
-                        const SizedBox(width: 15),
-                        // ✨ AQUI: Usando as strings fixas na exibição
-                        _infoBadge(
-                          Icons.calendar_month,
-                          "$dataExibicao às $horaExibicao",
-                          Colors.grey,
-                        ),
-                      ],
-                    ),
-                    if (cat == "agenda") ...[
-                      const SizedBox(height: 20),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: OutlinedButton(
-                          // ✨ AQUI: Calculando multa de desistência com a hora CERTA
-                          onPressed: () => _dialogoDesistencia(id, dataAlvoReal),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.redAccent,
-                            side: BorderSide(color: Colors.redAccent.withOpacity(0.5)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: const Text("DESISTIR DA PARTIDA", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                        ),
-                      ),
-                    ],
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _infoBadge(IconData icon, String text, Color color) => Row(
-    children: [
-      Icon(icon, color: color.withOpacity(0.7), size: 14),
-      const SizedBox(width: 4),
-      Text(
-        text,
-        style: TextStyle(
-          color: color,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    ],
-  );
 }

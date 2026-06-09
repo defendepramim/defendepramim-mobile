@@ -8,17 +8,17 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Future.wait([
-    // MUDANÇA: 'edgeToEdge' é muito mais fluido para o teclado do que 'immersiveSticky'
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge),
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
   ]);
 
-  // Mantemos o estilo premium, mas permitindo que o sistema gerencie o teclado melhor
+  // 🎨 O TOQUE DO MASTER UI/UX: Barras de sistema elegantes e integradas ao Dark Mode
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarIconBrightness: Brightness.light,
+    statusBarColor: Colors.transparent, // Topo 100% vazado para a cor do app
+    statusBarIconBrightness: Brightness.light, // Ícones de hora/bateria brancos no Android
+    statusBarBrightness: Brightness.dark, // Ícones de hora/bateria brancos no iOS (iPhone)
+    systemNavigationBarColor: Color(0xFF121212), // Mesma cor do seu Scaffold para camuflagem total
+    systemNavigationBarIconBrightness: Brightness.light, // Botões de navegação brancos
   ));
 
   try {
@@ -44,7 +44,6 @@ class GlobalKeyboardDismiss extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () {
-        // Encontra o foco atual e o remove, fechando o teclado com suavidade
         FocusScopeNode currentFocus = FocusScope.of(context);
         if (!currentFocus.hasPrimaryFocus && currentFocus.focusedChild != null) {
           FocusManager.instance.primaryFocus?.unfocus();

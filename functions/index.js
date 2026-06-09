@@ -14,7 +14,7 @@ exports.notificarNovaPelada = functions.firestore
 
         // Monta a notificação
         const mensagem = {
-            topic: "goleiros_ativos", // Vamos fazer o app assinar esse tópico depois!
+            topic: "goleiros_ativos", // O app deve assinar esse tópico
             notification: {
                 title: "⚽ Nova Convocação Aberta!",
                 body: `Pelada de R$ ${jogo.valor.toFixed(2)} dia ${jogo.dataExibicao} às ${jogo.horaExibicao}. Aceite rápido!`,
@@ -38,7 +38,6 @@ exports.notificarMudancaStatus = functions.firestore
         const jogoAntes = change.before.data();
         const jogoDepois = change.after.data();
 
-        // Se o status não mudou (ex: editou só o local), interrompe a função
         if (jogoAntes.status === jogoDepois.status) return null;
 
         // 🔴 CASO A: Contratante cancelou e já tinha um Goleiro escalado
@@ -90,7 +89,6 @@ exports.dispararNotificacaoAdmin = functions.firestore
         try {
             let query = admin.firestore().collection("usuarios");
 
-            // Se o alvo não for 'todos', filtra pelo tipo de perfil
             if (alvo !== "todos") {
                 query = query.where("tipoPerfil", "==", alvo);
             }
@@ -98,7 +96,6 @@ exports.dispararNotificacaoAdmin = functions.firestore
             const usuariosSnapshot = await query.get();
             const tokens = [];
 
-            // Vasculha os usuários e coleta os tokens válidos
             usuariosSnapshot.forEach((doc) => {
                 const fcmToken = doc.data().fcmToken;
                 if (fcmToken) {
@@ -111,21 +108,15 @@ exports.dispararNotificacaoAdmin = functions.firestore
                 return snap.ref.update({ status: "sem_destinatarios" });
             }
 
-            // Monta o pacote Multicast (Disparo em lote)
             const payload = {
-                notification: {
-                    title: titulo,
-                    body: mensagem,
-                },
-                tokens: tokens, // Array com todos os tokens que vão apitar
+                notification: { title: titulo, body: mensagem },
+                tokens: tokens,
             };
 
-            // Dispara para geral de uma vez (Firebase cuida da entrega)
             const response = await admin.messaging().sendMulticast(payload);
             
             console.log(`Aviso do Admin disparado! Sucessos: ${response.successCount}, Falhas: ${response.failureCount}`);
 
-            // Atualiza o card no painel do Admin avisando que deu certo
             return snap.ref.update({ 
                 status: "concluido",
                 sucessos: response.successCount,
@@ -140,92 +131,97 @@ exports.dispararNotificacaoAdmin = functions.firestore
     });
 
 // ============================================================================
-// 4. ROTINA DE PAGAMENTO AUTOMÁTICO E FINALIZAÇÃO DE JOGOS (Roda a cada 30 min)
+// 4. 🤖 ROBÔ DE PAGAMENTO AUTOMÁTICO BLINDADO (Roda a cada 1 hora)
 // ============================================================================
-exports.rotinaPagamentoAutomatico = functions.pubsub.schedule('every 30 minutes').onRun(async (context) => {
-    try {
-        const db = admin.firestore();
-        const agora = new Date();
-
-        // 1. Busca a variável global configurada pelo Admin
-        const configSnapshot = await db.collection('configuracoes').doc('global').get();
-        let horasPagamentoAuto = 12; // Valor padrão de segurança
-
-        if (configSnapshot.exists && configSnapshot.data().horasPagamentoAuto !== undefined) {
-            horasPagamentoAuto = configSnapshot.data().horasPagamentoAuto;
-        }
-
-        // Calcula o limite de tempo para liberação do pagamento
-        const tempoLimiteDeCorte = new Date(agora);
-        tempoLimiteDeCorte.setHours(tempoLimiteDeCorte.getHours() - horasPagamentoAuto);
-
-        // 2. Busca jogos que estão 'fechados', e a dataHora é ANTES do limite de corte
-        const snapshotJogos = await db.collection('jogos')
-            .where('status', '==', 'fechado')
-            .where('dataHora', '<', tempoLimiteDeCorte)
-            .get();
-
-        if (snapshotJogos.empty) {
-            console.log(`Rotina OK: Nenhum jogo pendente de repasse (Regra: ${horasPagamentoAuto}h).`);
-            return null;
-        }
-
-        console.log(`Iniciando repasse automático para ${snapshotJogos.size} jogos... (Regra: ${horasPagamentoAuto}h)`);
-
-        // 3. Processa cada jogo encontrado
-        for (const doc of snapshotJogos.docs) {
-            const jogo = doc.data();
-            const idJogo = doc.id;
-            const valorRepasse = jogo.valorGoleiro || 0; // O que o goleiro tem a receber
-            const idGoleiro = jogo.idGoleiro;
-
-            if (valorRepasse > 0 && idGoleiro) {
-                // Inicia uma transaction para garantir a integridade dos dados
-                await db.runTransaction(async (t) => {
-                    const jogoRef = db.collection('jogos').doc(idJogo);
-                    const goleiroRef = db.collection('usuarios').doc(idGoleiro);
-                    
-                    // A. Atualiza o status do jogo e crava a flag para o app Mobile ler
-                    t.update(jogoRef, {
-                        status: 'finalizado',
-                        finalizadoAutomaticamente: true,
-                        notificadoNoApp: false // O mobile vai ver isso e exibir o alerta
-                    });
-
-                    // B. Adiciona o saldo na carteira do Goleiro
-                    t.update(goleiroRef, {
-                        saldo: admin.firestore.FieldValue.increment(valorRepasse)
-                    });
-
-                    // C. Registra a transação global para histórico
-                    const novaTransacaoRef = db.collection('transacoes').doc();
-                    t.set(novaTransacaoRef, {
-                        idUsuario: idGoleiro,
-                        tipo: "recebimento",
-                        valor: valorRepasse,
-                        status: "concluido",
-                        descricao: `Pagamento pela partida (${jogo.local || 'Local não informado'})`,
-                        data: admin.firestore.FieldValue.serverTimestamp(),
-                        idJogo: idJogo,
-                    });
-                });
-                console.log(`[SUCESSO] Repasse de R$ ${valorRepasse} para o goleiro ${idGoleiro} (Jogo: ${idJogo})`);
-            } else {
-                console.warn(`[AVISO] Jogo ${idJogo} não pôde ser repassado. Sem goleiro ou valor zero.`);
-            }
-        }
-        
-        console.log("Lote de pagamentos finalizado com sucesso.");
-        return null;
-
-    } catch (error) {
-        console.error("Erro fatal na rotina de pagamentos:", error);
-        return null;
+exports.rotinaPagamentoAutomatico = functions.pubsub.schedule('every 1 hours').onRun(async (context) => {
+    const db = admin.firestore();
+    const agora = admin.firestore.Timestamp.now();
+  
+    // 1. Busca todos os jogos que ainda estão travados em 'fechado'
+    const jogosSnapshot = await db.collection('jogos').where('status', '==', 'fechado').get();
+  
+    if (jogosSnapshot.empty) {
+      console.log("Nenhum jogo pendente de pagamento automático.");
+      return null;
     }
-});
+  
+    let promessasTransacao = [];
+  
+    // 2. Varre jogo por jogo
+    jogosSnapshot.forEach((doc) => {
+      const dados = doc.data();
+      if (!dados.dataHora || !dados.idGoleiro) return;
+  
+      const dataHoraJogo = dados.dataHora.toDate();
+      const duracaoMin = dados.duracao || 60;
+  
+      // Calcula o limite: Fim da partida + 12 horas (Pode ajustar o 12 se quiser)
+      const limitePagamento = new Date(dataHoraJogo.getTime() + (duracaoMin * 60000) + (12 * 3600000));
+  
+      // Se a hora atual já passou do limite das 12h após o fim do jogo, paga o goleiro!
+      if (agora.toDate() > limitePagamento) {
+        const idJogo = doc.id;
+        const idGoleiro = dados.idGoleiro;
+        const valorRepasse = dados.valorGoleiro || dados.valor || 0.0;
+  
+        const jogoRef = db.collection('jogos').doc(idJogo);
+        const goleiroRef = db.collection('usuarios').doc(idGoleiro);
+        const extratoGoleiro = goleiroRef.collection('extrato').doc();
+        const transacaoGeralRef = db.collection('transacoes').doc();
+  
+        // 3. Executa a transação segura direto no servidor
+        const operacao = db.runTransaction(async (transaction) => {
+          const jSnap = await transaction.get(jogoRef);
+          
+          // 🛡️ Trava de segurança máxima: Se o status mudou 1 segundo atrás, aborta.
+          if (jSnap.data().status !== 'fechado') return;
+  
+          // Atualiza Jogo
+          transaction.update(jogoRef, {
+            status: 'finalizado',
+            pagoEm: admin.firestore.FieldValue.serverTimestamp(),
+            finalizadoAutomaticamente: true
+          });
+  
+          // Atualiza Saldo do Goleiro e contador de partidas
+          transaction.update(goleiroRef, {
+            saldo: admin.firestore.FieldValue.increment(valorRepasse),
+            atuadas: admin.firestore.FieldValue.increment(1)
+          });
+  
+          // Gera o extrato na sub-coleção do goleiro (Como estava no seu mobile)
+          transaction.set(extratoGoleiro, {
+            id: extratoGoleiro.id,
+            tipo: 'recebimento',
+            valor: valorRepasse,
+            data: admin.firestore.FieldValue.serverTimestamp(),
+            descricao: `Pelada (Auto): ${dados.local || 'Arena'}`,
+            idJogo: idJogo,
+            status: 'concluido'
+          });
 
-
-// Apague tudo o que estava abaixo da linha "return null; \n });" da rotina de pagamentos e cole isso:
+          // Registra a transação global para histórico administrativo
+          transaction.set(transacaoGeralRef, {
+            idUsuario: idGoleiro,
+            tipo: "recebimento",
+            valor: valorRepasse,
+            status: "concluido",
+            descricao: `Pagamento pela partida (${dados.local || 'Local não informado'})`,
+            data: admin.firestore.FieldValue.serverTimestamp(),
+            idJogo: idJogo,
+          });
+        });
+  
+        promessasTransacao.push(operacao);
+      }
+    });
+  
+    // Aguarda todos os pagamentos dessa "leva" terminarem
+    await Promise.all(promessasTransacao);
+    console.log(`Sucesso: ${promessasTransacao.length} goleiros foram pagos automaticamente neste ciclo!`);
+    
+    return null;
+  });
 
 // ============================================================================
 // 5. GATILHO REATIVO: CRIAR CONTA DE ADMINISTRADOR EXCLUSIVA PELO PAINEL

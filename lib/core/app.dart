@@ -3,8 +3,8 @@ import '../ui/screens/auth_check.dart';
 import '../ui/screens/login_screen.dart';
 import '../ui/screens/initial_screen.dart';
 import '../ui/screens/cadastro_screen.dart';
-// Se tiver a tela Home real, importe ela aqui:
-// import '../ui/screens/home_screen.dart'; 
+// Note que não precisamos importar as homes individuais aqui, 
+// pois o AuthCheck já faz isso lá dentro dele!
 
 class DefendePraMimApp extends StatelessWidget {
   const DefendePraMimApp({super.key});
@@ -35,20 +35,17 @@ class DefendePraMimApp extends StatelessWidget {
         ),
       ),
 
-      // 🚩 O AuthCheck decide qual tela mostrar primeiro (Login ou Home)
+      // 🚩 O AuthCheck decide qual tela mostrar primeiro
       home: const AuthCheck(), 
 
-      // 🚩 MAPA DE ROTAS - O Navigator precisa disso para não crashar
+      // 🚩 MAPA DE ROTAS
       routes: {
         '/inicio': (context) => const InitialScreen(),
         '/login': (context) => const LoginScreen(),
         '/cadastro': (context) => const TelaCadastro(),
         
-        // ESSA LINHA É OBRIGATÓRIA se você usa pushNamed('/home')
-        '/home': (context) => const Scaffold(
-          body: Center(child: Text("Bem-vindo ao DefendePraMim!")),
-        ), 
-        // 👆 Se você tiver uma classe como 'HomeScreen()', coloque-a aqui no lugar do Scaffold.
+        // 🚀 A GRANDE MUDANÇA: A rota /home agora aponta para o Cérebro do App!
+        '/home': (context) => const AuthCheck(), 
       },
     ); 
   }

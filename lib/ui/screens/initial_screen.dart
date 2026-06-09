@@ -23,11 +23,14 @@ Future<void> _entrarComGoogle() async {
     setState(() => _carregandoGoogle = true);
 
     try {
-      // Código limpo, sem "auth_google"
       final GoogleSignIn googleSignIn = GoogleSignIn(
         scopes: ['email'],
       );
       
+      // 🟢 A MARRETA NO CACHE: Limpa qualquer conta lembrada antes de abrir a janela!
+      await googleSignIn.signOut(); 
+      
+      // Agora sim ele chama a tela e é obrigado a perguntar qual conta usar
       final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
       
       if (googleUser == null) {

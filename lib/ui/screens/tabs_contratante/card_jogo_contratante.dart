@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:defendepramim/ui/screens/convocacao/tela_criar_jogo.dart';
-import 'package:defendepramim/services/push_notification_service.dart'; // Ajuste o caminho se necessário
+import 'package:defendepramim/services/push_notification_service.dart';
 
 class CardJogoContratante extends StatefulWidget {
   final Map<String, dynamic> jogo;
@@ -19,24 +19,15 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
   bool _isLoading = false;
   Timer? _timer;
   Duration _diferencaServidor = Duration.zero;
-  bool _pagamentoAutomaticoEmAndamento = false;
 
 @override
   void initState() {
     super.initState();
-
-    // 🟢 LIGA O MOTOR DE NOTIFICAÇÕES PARA O CONTRATANTE
     PushNotificationService().inicializar();
-
-    _sincronizarRelogio().then((_) {
-      _verificarPagamentoAtrasado();
-    });
+    _sincronizarRelogio();
     
     _timer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      if (mounted) {
-        setState(() {});
-        _verificarPagamentoAtrasado();
-      }
+      if (mounted) setState(() {});
     });
   }
 
@@ -72,27 +63,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     );
   }
 
-  // --- 🤖 SISTEMA DE PAGAMENTO AUTOMÁTICO PELO APP ---
-  Future<void> _verificarPagamentoAtrasado() async {
-    if (_pagamentoAutomaticoEmAndamento) return;
-
-    final status = widget.jogo['status'] ?? 'aberto';
-    if (status != 'fechado') return;
-
-    final dt = (widget.jogo['dataHora'] as Timestamp).toDate();
-    final duracao = widget.jogo['duracao'] ?? 60;
-    final limitePagamento = dt.add(Duration(minutes: duracao)).add(const Duration(hours: 12));
-    final agora = _obterHoraRealAgora();
-
-    if (agora.isAfter(limitePagamento)) {
-      setState(() => _pagamentoAutomaticoEmAndamento = true);
-      await _pagarGoleiro(automatico: true);
-      setState(() => _pagamentoAutomaticoEmAndamento = false);
-    }
-  }
-
-  // --- ✨ SISTEMA DE AVALIAÇÃO DE GOLEIROS ---
-  Future<void> _mostrarModalAvaliacao(String idGoleiro) async {
+    Future<void> _mostrarModalAvaliacao(String idGoleiro) async {
     int estrelas = 5;
     bool enviando = false;
 
@@ -103,34 +74,23 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
         builder: (context, setStateSB) => AlertDialog(
           backgroundColor: const Color(0xFF1E1E1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text(
-            "Avalie o Goleiro", 
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold), 
-            textAlign: TextAlign.center
-          ),
+          title: const Text("Avalie o Goleiro", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                "Como foi o desempenho e o comportamento do goleiro na partida?", 
-                style: TextStyle(color: Colors.white70, fontSize: 13), 
-                textAlign: TextAlign.center
-              ),
+              const Text("Como foi o desempenho e o comportamento do goleiro na partida?", style: TextStyle(color: Colors.white70, fontSize: 13), textAlign: TextAlign.center),
               const SizedBox(height: 20),
-              // Ajuste Responsivo: Wrap garante que, se a tela for minúscula, 
-              // a última estrela caia para a linha de baixo sem estourar.
               Wrap(
                 alignment: WrapAlignment.center,
-                spacing: 0, // Tira o espaço extra entre eles
+                spacing: 0,
                 children: List.generate(5, (index) {
                   return IconButton(
-                    // Reduz a "zona invisível" de clique do botão
                     padding: const EdgeInsets.all(4), 
                     constraints: const BoxConstraints(), 
                     icon: Icon(
                       index < estrelas ? Icons.star_rounded : Icons.star_border_rounded,
                       color: Colors.amber,
-                      size: 36, // De 40 para 36 ajuda muito nos iPhones menores
+                      size: 36,
                     ),
                     onPressed: () {
                       setStateSB(() => estrelas = index + 1);
@@ -139,10 +99,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                 }),
               ),
               if (enviando) 
-                const Padding(
-                  padding: EdgeInsets.only(top: 20), 
-                  child: CircularProgressIndicator(color: Color(0xFF00E676))
-                ),
+                const Padding(padding: EdgeInsets.only(top: 20), child: CircularProgressIndicator(color: Color(0xFF00E676))),
             ],
           ),
           actions: [
@@ -191,16 +148,8 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     );
   }
 
-  // --- LÓGICA DE CONTESTAÇÃO ---
   Future<void> _abrirModalContestacao() async {
-    final motivos = [
-      "Goleiro não apareceu (W.O.)",
-      "Goleiro chegou muito atrasado",
-      "Comportamento inadequado",
-      "Nível técnico abaixo do esperado",
-      "Outro"
-    ];
-
+    final motivos = ["Goleiro não apareceu (W.O.)", "Goleiro chegou muito atrasado", "Comportamento inadequado", "Nível técnico abaixo do esperado", "Outro"];
     String? motivoSelecionado;
     final TextEditingController detalheController = TextEditingController();
 
@@ -285,7 +234,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
         }
       });
 
-      // ✨ ADICIONE ISSO: Incrementa o contador de "problemas/disputas"
       batch.update(contratanteRef, {
         "jogosContestados": FieldValue.increment(1) 
       });
@@ -303,7 +251,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     }
   }
 
-  // --- LÓGICA DE PAGAMENTO ---
   Future<void> _confirmarPagamentoDialog() async {
     final confirmar = await showDialog<bool>(
       context: context,
@@ -330,11 +277,11 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     );
 
     if (confirmar == true) {
-      _pagarGoleiro(automatico: false);
+      _pagarGoleiro();
     }
   }
 
-  Future<void> _pagarGoleiro({bool automatico = false}) async {
+  Future<void> _pagarGoleiro() async {
     final idGoleiro = widget.jogo['idGoleiro'];
     final idJogo = widget.jogo['id'];
     final double valorGoleiro = (widget.jogo['valor'] ?? 0.0).toDouble();
@@ -344,27 +291,24 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
        return;
     }
 
-    if (!automatico) setState(() => _isLoading = true);
+    setState(() => _isLoading = true);
     
     try {
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         DocumentReference jogoRef = FirebaseFirestore.instance.collection("jogos").doc(idJogo);
         DocumentReference goleiroRef = FirebaseFirestore.instance.collection("usuarios").doc(idGoleiro);
-        // ✨ NOVO: Referência do Contratante
         DocumentReference contratanteRef = FirebaseFirestore.instance.collection("usuarios").doc(widget.jogo['idContratante']);
 
         transaction.update(jogoRef, {
           "status": "finalizado", 
           "pagoEm": FieldValue.serverTimestamp(),
-          if (automatico) "finalizadoAutomaticamente": true
         });
 
         transaction.update(goleiroRef, {
           "saldo": FieldValue.increment(valorGoleiro),
-          "atuadas": FieldValue.increment(1) // ✅ Já tinha, ótimo!
+          "atuadas": FieldValue.increment(1) 
         });
         
-        // ✨ ADICIONE ISSO: Incrementa o sucesso do contratante
         transaction.update(contratanteRef, {
           "jogosRealizados": FieldValue.increment(1)
         });
@@ -381,35 +325,27 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
         });
       });
 
-      if (automatico) {
-        if (mounted) setState(() => widget.jogo['status'] = 'finalizado');
-      } else {
-        _showSnackBar("Pagamento liberado! O goleiro já recebeu.", cor: Colors.green);
-        await _mostrarModalAvaliacao(idGoleiro);
-      }
+      _showSnackBar("Pagamento liberado! O goleiro já recebeu.", cor: Colors.green);
+      await _mostrarModalAvaliacao(idGoleiro);
+
     } catch (e) {
-      if (!automatico) _showSnackBar("Erro ao processar transação financeira.", cor: Colors.red);
+      _showSnackBar("Erro ao processar transação financeira.", cor: Colors.red);
     } finally {
-      if (mounted && !automatico) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // --- LÓGICA DE CANCELAMENTO COM REGRAS DO ADMIN ---
+  // 🟢 AQUI ESTÁ A CORREÇÃO DO EXTRATO NO CANCELAMENTO
   Future<void> _cancelarPartida() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
     setState(() => _isLoading = true);
 
-    int horasRegraMulta = 4; // Valor padrão de segurança caso a internet caia
+    int horasRegraMulta = 4;
 
     try {
-      // 1. Busca as configurações globais do Admin em tempo real
-      final configDoc = await FirebaseFirestore.instance
-          .collection('configuracoes')
-          .doc('global')
-          .get();
-      
+      final configDoc = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
       if (configDoc.exists && configDoc.data()?['horasMultaCancelamento'] != null) {
         horasRegraMulta = (configDoc.data()?['horasMultaCancelamento'] as num).toInt();
       }
@@ -423,11 +359,9 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     final int dHoras = dataDoJogo.difference(_obterHoraRealAgora()).inHours;
     final double valorTotal = (widget.jogo['valor'] ?? 0.0).toDouble();
 
-    // 🟢 Agora a regra usa a variável dinâmica que veio do Admin!
     double multa = (dHoras < horasRegraMulta) ? 10.0 : 0.0;
     double valorEstorno = (valorTotal - multa).clamp(0, 9999);
 
-    // 1. Popup de Aviso de Taxa dinâmico
     if (multa > 0) {
       final aceitouTaxa = await showDialog<bool>(
         context: context,
@@ -463,7 +397,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
       if (aceitouTaxa != true) return;
     }
 
-    // 2. Popup de Motivos
     final resultado = await _dialogConfirmarCancelamento(multa, valorEstorno);
     if (resultado == null || resultado['confirmado'] != true) return;
 
@@ -475,7 +408,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
         DocumentReference jogoRef = FirebaseFirestore.instance.collection("jogos").doc(widget.jogo['id']);
         DocumentReference userRef = FirebaseFirestore.instance.collection("usuarios").doc(uid);
 
-        // A. Atualiza o status do Jogo
         transaction.update(jogoRef, {
           "status": "cancelado",
           "canceladoEm": FieldValue.serverTimestamp(),
@@ -485,17 +417,17 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
           "valorEstornado": valorEstorno,
         });
 
-        // B. Devolve o dinheiro para o Contratante e soma a desistência
         transaction.update(userRef, {
           "saldo": FieldValue.increment(valorEstorno),
           "qtdDesistencias": FieldValue.increment(1)
         });
 
-        // ✨ C. Registra na Coleção GLOBAL de Transações (Para a Aba Carteira funcionar)
-        DocumentReference transacaoRef = FirebaseFirestore.instance.collection('transacoes').doc();
-        transaction.set(transacaoRef, {
+        // ✨ CORREÇÃO 1: Salvando o reembolso direto no extrato do usuário!
+        DocumentReference extratoReembolso = userRef.collection('extrato').doc();
+        transaction.set(extratoReembolso, {
+          "id": extratoReembolso.id,
           "idUsuario": uid,
-          "tipo": "reembolso",
+          "tipo": "estorno", // A aba financeira lê 'estorno' como verde (+)
           "valor": valorEstorno,
           "status": "concluido", 
           "descricao": multa > 0 ? "Reembolso Parcial (${widget.jogo['local']})" : "Reembolso Integral (${widget.jogo['local']})",
@@ -503,12 +435,13 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
           "idJogo": widget.jogo['id'],
         });
 
-        // ✨ D. Se teve multa, grava o cartão vermelho separado
+        // ✨ CORREÇÃO 2: Salvando a multa no extrato!
         if (multa > 0) {
-          DocumentReference multaRef = FirebaseFirestore.instance.collection('transacoes').doc();
-          transaction.set(multaRef, {
+          DocumentReference extratoMulta = userRef.collection('extrato').doc();
+          transaction.set(extratoMulta, {
+            "id": extratoMulta.id,
             "idUsuario": uid,
-            "tipo": "multa_cancelamento",
+            "tipo": "multa_cancelamento", // A aba financeira lê isso como vermelho/laranja (-)
             "status": "concluido",
             "valor": multa,
             "descricao": "Taxa de cancelamento (< ${horasRegraMulta}h)",
@@ -655,7 +588,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     );
   }
 
-  // --- INTERFACE PRINCIPAL ---
   @override
   Widget build(BuildContext context) {
     final status = widget.jogo['status'] ?? 'aberto';
@@ -801,7 +733,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     String label = status.toUpperCase();
     Color color = Colors.grey;
 
-    // ✨ 1. Calcula se o jogo está rolando neste exato momento
     bool emAndamento = false;
     if (status == 'fechado') {
       final dt = (widget.jogo['dataHora'] as Timestamp).toDate();
@@ -817,16 +748,14 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
       label = "AGUARDANDO FINALIZAÇÃO";
       color = Colors.orangeAccent;
     } else if (status == 'fechado' && emAndamento) {
-      // ✨ 2. Aplica o novo badge "Em Andamento"
       label = "EM ANDAMENTO ⚽"; 
-      color = Colors.amber; // Um amarelo/laranja dá um destaque ótimo no fundo preto
+      color = Colors.amber; 
     } else if (status == 'contestado') {
       label = "EM DISPUTA";
       color = Colors.redAccent;
     } else {
       switch (status) {
         case 'aberto': color = Colors.orangeAccent; label = "BUSCANDO GOLEIRO"; break;
-        // O "CONFIRMADO" agora só vai aparecer se o jogo for no futuro!
         case 'fechado': color = const Color(0xFF00E676); label = "CONFIRMADO"; break; 
         case 'finalizado': color = Colors.blueAccent; label = "PAGO"; break;
         case 'cancelado': color = Colors.white24; label = "CANCELADO"; break;

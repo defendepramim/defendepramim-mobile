@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart'; // 🟢 INJETADO PARA OS CÁLCULOS
+import 'package:url_launcher/url_launcher.dart'; // 🟢 INJETADO PARA ABRIR O MAPA
 
 class AbaBuscarJogos extends StatefulWidget {
   const AbaBuscarJogos({super.key});
@@ -15,6 +17,11 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
   Duration _diferencaServidor = Duration.zero;
   final Color primaryColor = const Color(0xFF00E676);
   String? _jogoProcessando;
+
+  // 🌍 MÁGICA DA GEOLOCALIZAÇÃO
+  Position? _posicaoGoleiro;
+  double _raioBuscaKm = 20.0; // Distância padrão
+  bool _buscandoGPS = true;
 
   @override
   void initState() {
@@ -32,10 +39,39 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
 
   Future<void> _inicializarDados() async {
     await _sincronizarRelogio();
+    await _pegarLocalizacaoGoleiro(); // 🌍 Pega o GPS logo na entrada
+    
     if (mounted) {
       _timer = Timer.periodic(const Duration(seconds: 30), (timer) {
         if (mounted) setState(() {});
       });
+    }
+  }
+
+  // 🌍 FUNÇÃO PARA PEGAR O GPS
+  Future<void> _pegarLocalizacaoGoleiro() async {
+    try {
+      bool servicoAtivo = await Geolocator.isLocationServiceEnabled();
+      if (!servicoAtivo) throw Exception("GPS Desativado");
+
+      LocationPermission permissao = await Geolocator.checkPermission();
+      if (permissao == LocationPermission.denied) {
+        permissao = await Geolocator.requestPermission();
+        if (permissao == LocationPermission.denied) throw Exception("Permissão negada");
+      }
+
+      Position pos = await Geolocator.getCurrentPosition();
+      if (mounted) {
+        setState(() {
+          _posicaoGoleiro = pos;
+          _buscandoGPS = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _buscandoGPS = false);
+        // Se der erro no GPS, mostra os jogos de qualquer distância.
+      }
     }
   }
 
@@ -66,126 +102,135 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     return "Faltam ${diferenca.inMinutes} min!";
   }
 
-// --- 🛡️ CONFIRMAÇÃO CORRIGIDA ---
-void _confirmarAceite(BuildContext context, String idJogo, Map<String, dynamic> jogo) {
-  // Guardamos o contexto da tela antes de abrir o diálogo
-  final screenContext = context; 
-
-  showDialog(
-    context: context,
-    builder: (dialogContext) => AlertDialog( // context do diálogo é 'dialogContext'
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      title: const Text("Confirmar Presença?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-      content: Text("Você confirma que irá ao ${jogo['local']}?\n\nLembre-se: desistências em menos de 4h geram multa."),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text("CANCELAR")),
-        ElevatedButton(
-          onPressed: () {
-            Navigator.pop(dialogContext); // Fecha o diálogo usando o context dele
-            _processarAceite(screenContext, idJogo); // Inicia o processo usando o context da TELA
-          },
-          style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
-          child: const Text("CONFIRMAR", style: TextStyle(color: Colors.black)),
+  void _confirmarAceite(BuildContext context, String idJogo, Map<String, dynamic> jogo) {
+    final screenContext = context; 
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Confirmar Presença?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: RichText(
+          text: TextSpan(
+            style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.4),
+            children: [
+              const TextSpan(text: "Você confirma sua presença no jogo em "),
+              TextSpan(
+                text: "${jogo['local']}?\n\n", 
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF00E676))
+              ),
+              const TextSpan(text: "⚽ Contamos com você no gol! "),
+              const TextSpan(
+                text: "Lembre-se: cancelamentos com menos de 4h de antecedência geram uma taxa de R\$ 10, descontada do seu próximo jogo.",
+                style: TextStyle(color: Colors.white54, fontSize: 14),
+              ),
+            ],
+          ),
         ),
-      ],
-    ),
-  );
-}
-
-  // --- 🛡️ PROCESSO COM TRATAMENTO DE ERRO MELHORADO ---
-Future<void> _processarAceite(BuildContext context, String idJogo) async {
-  final String? uidGoleiro = FirebaseAuth.instance.currentUser?.uid;
-  if (uidGoleiro == null) return;
-
-  if (!mounted) return;
-  setState(() => _jogoProcessando = idJogo);
-
-  try {
-    // 1. Busca os dados do jogo novo
-    final snapNovo = await FirebaseFirestore.instance.collection('jogos').doc(idJogo).get();
-    final dadosNovo = snapNovo.data() as Map<String, dynamic>;
-    final DateTime inicioNovo = (dadosNovo['dataHora'] as Timestamp).toDate();
-    final int duracaoMinNovo = (dadosNovo['duracao'] ?? 60).toInt();
-    final DateTime fimNovo = inicioNovo.add(Duration(minutes: duracaoMinNovo));
-    final String localNovo = (dadosNovo['local'] ?? '').toString().trim();
-
-    // 2. Busca conflitos
-    final DateTime inicioDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 0, 0, 0);
-    final DateTime fimDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 23, 59, 59);
-
-    final conflitosQuery = await FirebaseFirestore.instance
-        .collection('jogos')
-        .where('idGoleiro', isEqualTo: uidGoleiro)
-        .where('status', whereIn: ['fechado', 'finalizado'])
-        .where('dataHora', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDoDia))
-        .where('dataHora', isLessThanOrEqualTo: Timestamp.fromDate(fimDoDia))
-        .get();
-
-    for (var doc in conflitosQuery.docs) {
-      if (doc.id == idJogo) continue;
-      final dadosEx = doc.data();
-      final DateTime inicioEx = (dadosEx['dataHora'] as Timestamp).toDate();
-      final int duracaoEx = (dadosEx['duracao'] ?? 60).toInt();
-      final String localEx = (dadosEx['local'] ?? '').toString().trim();
-
-      DateTime fimExCalculado = inicioEx.add(Duration(minutes: duracaoEx));
-      bool precisaDeslocamento = localEx.toLowerCase() != localNovo.toLowerCase();
-
-      if (precisaDeslocamento) fimExCalculado = fimExCalculado.add(const Duration(minutes: 30));
-
-      if (inicioNovo.isBefore(fimExCalculado) && fimNovo.isAfter(inicioEx)) {
-        // LANÇA O ERRO PERSONALIZADO
-        throw precisaDeslocamento
-            ? "CONFLITO: Você já tem jogo em '$localEx'. Precisa de 30min para deslocamento."
-            : "CONFLITO: Você já tem um jogo neste horário em '$localEx'.";
-      }
-    }
-
-    // 3. Se passou pelos testes, faz a Transação
-    await FirebaseFirestore.instance.runTransaction((transaction) async {
-      // 🟢 1ª ALTERAÇÃO: Criamos a referência do usuário e buscamos o Snapshot dele
-      DocumentReference userRef = FirebaseFirestore.instance.collection('usuarios').doc(uidGoleiro);
-      DocumentSnapshot userSnap = await transaction.get(userRef);
-      
-      final dadosGoleiro = userSnap.data() as Map<String, dynamic>?;
-      String nomeGoleiroLogado = dadosGoleiro?['nome'] ?? "Goleiro";
-
-      DocumentReference jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
-      
-      transaction.update(jogoRef, {
-        'status': 'fechado',
-        'idGoleiro': uidGoleiro,
-        'nomeGoleiro': nomeGoleiroLogado, // 🟢 2ª ALTERAÇÃO: Salvando o nome no payload!
-        'aceitoEm': FieldValue.serverTimestamp(),
-      });
-    });
-
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(backgroundColor: Colors.green, content: Text("🧤 Jogo aceito!")),
-      );
-    }
-
-  } catch (e) {
-    debugPrint("❌ ERRO NO CATCH: $e");
-    
-    if (context.mounted) {
-      // Limpa a string do erro e exibe o alerta
-      String msgFinal = e.toString().replaceAll("Exception: ", "");
-      
-      _showAlertaCustom(
-        context,
-        titulo: msgFinal.contains("CONFLITO") ? "Agenda Cheia" : "Ops!",
-        mensagem: msgFinal,
-        icone: msgFinal.contains("CONFLITO") ? Icons.event_busy : Icons.error_outline,
-        corDestaque: msgFinal.contains("CONFLITO") ? Colors.orangeAccent : primaryColor,
-      );
-    }
-  } finally {
-    if (mounted) setState(() => _jogoProcessando = null);
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext), 
+            child: const Text("CANCELAR", style: TextStyle(color: Colors.grey))
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(dialogContext); 
+              _processarAceite(screenContext, idJogo); 
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
+            child: const Text("CONFIRMAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
-}
+
+  Future<void> _processarAceite(BuildContext context, String idJogo) async {
+    final String? uidGoleiro = FirebaseAuth.instance.currentUser?.uid;
+    if (uidGoleiro == null) return;
+
+    if (!mounted) return;
+    setState(() => _jogoProcessando = idJogo);
+
+    try {
+      final snapNovo = await FirebaseFirestore.instance.collection('jogos').doc(idJogo).get();
+      final dadosNovo = snapNovo.data() as Map<String, dynamic>;
+      final DateTime inicioNovo = (dadosNovo['dataHora'] as Timestamp).toDate();
+      final int duracaoMinNovo = (dadosNovo['duracao'] ?? 60).toInt();
+      final DateTime fimNovo = inicioNovo.add(Duration(minutes: duracaoMinNovo));
+      final String localNovo = (dadosNovo['local'] ?? '').toString().trim();
+
+      final DateTime inicioDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 0, 0, 0);
+      final DateTime fimDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 23, 59, 59);
+
+      final conflitosQuery = await FirebaseFirestore.instance
+          .collection('jogos')
+          .where('idGoleiro', isEqualTo: uidGoleiro)
+          .where('status', whereIn: ['fechado', 'finalizado'])
+          .where('dataHora', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDoDia))
+          .where('dataHora', isLessThanOrEqualTo: Timestamp.fromDate(fimDoDia))
+          .get();
+
+      for (var doc in conflitosQuery.docs) {
+        if (doc.id == idJogo) continue;
+        final dadosEx = doc.data();
+        final DateTime inicioEx = (dadosEx['dataHora'] as Timestamp).toDate();
+        final int duracaoEx = (dadosEx['duracao'] ?? 60).toInt();
+        final String localEx = (dadosEx['local'] ?? '').toString().trim();
+
+        DateTime fimExCalculado = inicioEx.add(Duration(minutes: duracaoEx));
+        bool precisaDeslocamento = localEx.toLowerCase() != localNovo.toLowerCase();
+
+        if (precisaDeslocamento) fimExCalculado = fimExCalculado.add(const Duration(minutes: 30));
+
+        if (inicioNovo.isBefore(fimExCalculado) && fimNovo.isAfter(inicioEx)) {
+          throw precisaDeslocamento
+              ? "CONFLITO: Você já tem jogo em '$localEx'. Precisa de 30min para deslocamento."
+              : "CONFLITO: Você já tem um jogo neste horário em '$localEx'.";
+        }
+      }
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        DocumentReference userRef = FirebaseFirestore.instance.collection('usuarios').doc(uidGoleiro);
+        DocumentSnapshot userSnap = await transaction.get(userRef);
+        
+        final dadosGoleiro = userSnap.data() as Map<String, dynamic>?;
+        String nomeGoleiroLogado = dadosGoleiro?['nome'] ?? "Goleiro";
+
+        DocumentReference jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
+        
+        transaction.update(jogoRef, {
+          'status': 'fechado',
+          'idGoleiro': uidGoleiro,
+          'nomeGoleiro': nomeGoleiroLogado, 
+          'aceitoEm': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(backgroundColor: Colors.green, content: Text("🧤 Jogo aceito!")),
+        );
+      }
+
+    } catch (e) {
+      debugPrint("❌ ERRO NO CATCH: $e");
+      
+      if (context.mounted) {
+        String msgFinal = e.toString().replaceAll("Exception: ", "");
+        
+        _showAlertaCustom(
+          context,
+          titulo: msgFinal.contains("CONFLITO") ? "Agenda Cheia" : "Ops!",
+          mensagem: msgFinal,
+          icone: msgFinal.contains("CONFLITO") ? Icons.event_busy : Icons.error_outline,
+          corDestaque: msgFinal.contains("CONFLITO") ? Colors.orangeAccent : primaryColor,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _jogoProcessando = null);
+    }
+  }
 
   void _showAlertaCustom(
     BuildContext context, {
@@ -238,139 +283,263 @@ Future<void> _processarAceite(BuildContext context, String idJogo) async {
       backgroundColor: Colors.black,
       body: CustomScrollView(
         slivers: [
-          const SliverAppBar(
+          SliverAppBar(
             backgroundColor: Colors.black,
             floating: true,
-            title: Text("Jogos Disponíveis", style: TextStyle(fontWeight: FontWeight.bold)),
+            pinned: true, // Deixa a barra presa no topo para o filtro não sumir
+            title: const Text("Jogos Disponíveis", style: TextStyle(fontWeight: FontWeight.bold)),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(60),
+              child: _buildFiltroRaio(), // 🎚️ NOSSA BARRA DE QUILOMETRAGEM AQUI!
+            ),
           ),
-          StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance.collection('jogos').where('status', isEqualTo: 'aberto').snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) return const SliverToBoxAdapter(child: Center(child: Text("Erro ao carregar")));
-              if (!snapshot.hasData) return const SliverToBoxAdapter(child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))));
+          
+          if (_buscandoGPS)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.all(40),
+                child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+              ),
+            )
+          else
+            StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance.collection('jogos').where('status', isEqualTo: 'aberto').snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) return const SliverToBoxAdapter(child: Center(child: Text("Erro ao carregar")));
+                if (!snapshot.hasData) return const SliverToBoxAdapter(child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))));
 
-              final documentos = snapshot.data!.docs.where((doc) {
-                final dados = doc.data() as Map<String, dynamic>;
-                final List desistentes = dados['desistentes'] ?? [];
-                if (desistentes.contains(uidGoleiro)) return false;
-                final DateTime dtAbsoluta = (dados['dataHora'] as Timestamp).toDate();
-                return dtAbsoluta.isAfter(agoraReal);
-              }).toList();
+                final documentosFiltrados = <DocumentSnapshot>[];
+                final distanciasMap = <String, double>{}; // Guarda a distância pré-calculada para não rodar o cálculo toda hora
 
-              documentos.sort((a, b) {
-                final dtA = (a.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
-                final dtB = (b.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
-                return dtA.compareTo(dtB);
-              });
+                for (var doc in snapshot.data!.docs) {
+                  final dados = doc.data() as Map<String, dynamic>;
+                  final List desistentes = dados['desistentes'] ?? [];
+                  if (desistentes.contains(uidGoleiro)) continue;
+                  
+                  final DateTime dtAbsoluta = (dados['dataHora'] as Timestamp).toDate();
+                  if (dtAbsoluta.isBefore(agoraReal)) continue;
 
-              if (documentos.isEmpty) {
-                return const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: 80),
-                    child: Center(child: Text("Nenhuma pelada disponível. ⚽", style: TextStyle(color: Colors.grey, fontSize: 16))),
+                  // 🌍 CÁLCULO DA DISTÂNCIA
+                  double distanciaCalculada = 999.0; // Se não tiver GPS, joga lá pra longe
+                  if (_posicaoGoleiro != null && dados['localizacao'] is GeoPoint) {
+                    final GeoPoint localJogo = dados['localizacao'];
+                    distanciaCalculada = Geolocator.distanceBetween(
+                      _posicaoGoleiro!.latitude, _posicaoGoleiro!.longitude,
+                      localJogo.latitude, localJogo.longitude
+                    ) / 1000; // Divide por mil para transformar Metros em Km
+                  }
+
+                  // Só adiciona na lista se estiver DENTRO do raio de busca
+                  if (distanciaCalculada <= _raioBuscaKm) {
+                    documentosFiltrados.add(doc);
+                    distanciasMap[doc.id] = distanciaCalculada;
+                  }
+                }
+
+                documentosFiltrados.sort((a, b) {
+                  final dtA = (a.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
+                  final dtB = (b.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
+                  return dtA.compareTo(dtB);
+                });
+
+                if (documentosFiltrados.isEmpty) {
+                  return const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 80),
+                      child: Center(child: Text("Nenhum jogo no seu raio de busca. ⚽", style: TextStyle(color: Colors.grey, fontSize: 16))),
+                    ),
+                  );
+                }
+
+                return SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final doc = documentosFiltrados[index];
+                        final dados = doc.data() as Map<String, dynamic>;
+                        final dist = distanciasMap[doc.id] ?? 0.0;
+                        return _buildCardBusca(context, dados, doc.id, dist);
+                      },
+                      childCount: documentosFiltrados.length,
+                    ),
                   ),
                 );
-              }
+              },
+            ),
+        ],
+      ),
+    );
+  }
 
-              return SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _buildCardBusca(context, documentos[index].data() as Map<String, dynamic>, documentos[index].id),
-                    childCount: documentos.length,
-                  ),
-                ),
-              );
-            },
+  // 🎚️ WIDGET DO SLIDER DE QUILOMETRAGEM
+  Widget _buildFiltroRaio() {
+    return Container(
+      color: Colors.black,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
+        children: [
+          const Icon(Icons.radar_rounded, color: Colors.grey, size: 20),
+          const SizedBox(width: 10),
+          Text("Raio: ${_raioBuscaKm.toInt()}km", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: primaryColor,
+                inactiveTrackColor: Colors.white12,
+                thumbColor: primaryColor,
+                overlayColor: primaryColor.withOpacity(0.2),
+                trackHeight: 2.0,
+              ),
+              child: Slider(
+                value: _raioBuscaKm,
+                min: 5.0,
+                max: 100.0,
+                divisions: 19, // Pulos de 5 em 5km
+                onChanged: (val) => setState(() => _raioBuscaKm = val),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-Widget _buildCardBusca(BuildContext context, Map<String, dynamic> jogo, String id) {
+  // 🌍 CARD COM NOVO VISUAL E DISTÂNCIA
+  // 🌍 CARD PREMIUM DE BUSCA (PADRÃO UBER/IFOOD)
+  Widget _buildCardBusca(BuildContext context, Map<String, dynamic> jogo, String id, double distanciaEmKm) {
     final bool isProcessing = _jogoProcessando == id;
 
-    // 1. Pega o Timestamp antigo só para garantir o ano
     final DateTime dtAbsoluta = (jogo['dataHora'] as Timestamp).toDate();
-
-    // 2. Pega as Strings blindadas que não sofrem efeito de fuso horário
     final String dataExibicao = jogo['dataExibicao'] ?? "${dtAbsoluta.day.toString().padLeft(2, '0')}/${dtAbsoluta.month.toString().padLeft(2, '0')}";
     final String horaExibicao = jogo['horaExibicao'] ?? "${dtAbsoluta.hour.toString().padLeft(2, '0')}:${dtAbsoluta.minute.toString().padLeft(2, '0')}";
 
-    // ✨ 3. A MÁGICA: Reconstruir o relógio ignorando o fuso do criador!
     DateTime dataAlvoReal;
     try {
       final partesData = dataExibicao.split('/');
       final partesHora = horaExibicao.split(':');
-      dataAlvoReal = DateTime(
-        dtAbsoluta.year, // Ano
-        int.parse(partesData[1]), // Mês
-        int.parse(partesData[0]), // Dia
-        int.parse(partesHora[0]), // Hora Nominal
-        int.parse(partesHora[1]), // Minuto Nominal
-      );
+      dataAlvoReal = DateTime(dtAbsoluta.year, int.parse(partesData[1]), int.parse(partesData[0]), int.parse(partesHora[0]), int.parse(partesHora[1]));
     } catch (e) {
-      // Segurança: se der erro na conversão do texto, usa o Timestamp padrão
       dataAlvoReal = dtAbsoluta; 
     }
 
-    // 4. Agora os cálculos usam a dataAlvoReal (correta)
     final bool isNear = dataAlvoReal.difference(_obterHoraRealAgora()).inHours < 2;
+    
+    // Separa o Nome da Quadra do Endereço (Ex: "Arena Soccer (Rua X, 123)")
+    final String localCompleto = jogo['local'] ?? 'Endereço não informado';
+    final List<String> partesLocal = localCompleto.split('(');
+    final String nomeQuadra = partesLocal[0].trim();
+    final String enderecoRua = partesLocal.length > 1 ? partesLocal[1].replaceAll(')', '').trim() : "Endereço no mapa";
 
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: isNear ? Colors.orange.withOpacity(0.3) : Colors.white.withOpacity(0.05)),
+        border: Border.all(color: isNear ? Colors.orange.withOpacity(0.4) : Colors.white.withOpacity(0.05)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5)),
+        ]
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 💰 HIERARQUIA 1: O VALOR (O que importa primeiro)
           Container(
-            height: 100,
-            width: double.infinity,
+            padding: const EdgeInsets.only(left: 20, right: 20, top: 20, bottom: 15),
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [Colors.white.withOpacity(0.05), Colors.transparent], begin: Alignment.bottomCenter, end: Alignment.topCenter),
+              color: primaryColor.withOpacity(0.05),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             ),
-            child: Icon(jogo['categoria'] == 'futsal' ? Icons.sports_soccer : Icons.stadium_outlined, color: Colors.white.withOpacity(0.05), size: 60),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("VOCÊ GANHA", style: TextStyle(color: primaryColor.withOpacity(0.8), fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1)),
+                    const SizedBox(height: 2),
+                    Text("R\$ ${jogo['valorGoleiro'] ?? jogo['valor']}", style: TextStyle(color: primaryColor, fontWeight: FontWeight.w900, fontSize: 28)),
+                  ],
+                ),
+                Icon(jogo['categoria'] == 'futsal' ? Icons.sports_soccer : Icons.stadium_outlined, color: Colors.white10, size: 40),
+              ],
+            ),
           ),
+          
           Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 📍 HIERARQUIA 2: O LOCAL E O MAPA
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: Text(jogo['local'] ?? 'Arena', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20))),
-                    Text("R\$ ${jogo['valor']}", style: TextStyle(color: const Color(0xFF00E676), fontWeight: FontWeight.w900, fontSize: 22)),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 3),
+                      child: Icon(Icons.location_on, color: Colors.grey, size: 18),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(nomeQuadra, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16), overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 2),
+                          Text(enderecoRua, style: const TextStyle(color: Colors.white54, fontSize: 13, height: 1.3), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        ],
+                      ),
+                    ),
+                    // BOTÃO DE ABRIR O MAPA
+                    if (jogo['latitude'] != null && jogo['longitude'] != null)
+                      IconButton(
+                        onPressed: () => _abrirNoMapaNativo(jogo['latitude'], jogo['longitude']),
+                        icon: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                          child: const Icon(Icons.map_rounded, color: Colors.blueAccent, size: 20),
+                        ),
+                        tooltip: "Abrir Rota",
+                      )
                   ],
                 ),
-                const SizedBox(height: 12),
-                Row(
+                
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Divider(color: Colors.white10, height: 1),
+                ),
+                
+                // ⏳ HIERARQUIA 3: OS BADGES (Tempo, Data e Distância)
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 10,
                   children: [
-                    // ✨ Usa a dataAlvoReal para o cronômetro ficar perfeito
-                    _infoBadge(Icons.access_time, _formatarTempoRestante(dataAlvoReal), isNear ? Colors.orange : const Color(0xFF00E676)),
-                    const SizedBox(width: 12),
-                    // ✨ Usa as strings fixas para a exibição do calendário
-                    _infoBadge(Icons.calendar_month, "$dataExibicao às $horaExibicao", Colors.grey),
+                    _infoBadge(Icons.calendar_month, "$dataExibicao às $horaExibicao", Colors.white70),
+                    _infoBadge(Icons.access_time, _formatarTempoRestante(dataAlvoReal), isNear ? Colors.orange : Colors.white70),
+                    if (_posicaoGoleiro != null) 
+                      _infoBadge(Icons.route, "${distanciaEmKm.toStringAsFixed(1)} km", Colors.blueAccent),
                   ],
                 ),
-                const SizedBox(height: 20),
+                
+                const SizedBox(height: 24),
+                
+                // 🚀 AÇÃO FINAL
                 SizedBox(
                   width: double.infinity,
                   height: 52,
                   child: ElevatedButton(
                     onPressed: isProcessing ? null : () => _confirmarAceite(context, id, jogo),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: isProcessing ? Colors.grey[800] : const Color(0xFF00E676),
+                      backgroundColor: isProcessing ? Colors.grey[800] : primaryColor,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      elevation: isNear ? 8 : 2,
+                      shadowColor: primaryColor.withOpacity(0.5),
                     ),
                     child: isProcessing
-                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : const Text("ACEITAR JOGO", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                        : const Text("ACEITAR CONVOCAÇÃO", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.5)),
                   ),
                 )
               ],
@@ -381,11 +550,38 @@ Widget _buildCardBusca(BuildContext context, Map<String, dynamic> jogo, String i
     );
   }
 
-  Widget _infoBadge(IconData icon, String text, Color color) {
-    return Row(children: [
-      Icon(icon, color: color.withOpacity(0.7), size: 14),
-      const SizedBox(width: 4),
-      Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold))
-    ]);
+  // 🗺️ FUNÇÃO QUE ABRE O GOOGLE MAPS / WAZE DO CELULAR
+  Future<void> _abrirNoMapaNativo(double lat, double lng) async {
+    // Monta a URL padrão universal do Google Maps (Funciona no Android e iOS)
+    final Uri url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    
+    try {
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication); // Força abrir no app de mapa, não no navegador interno
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Não foi possível abrir o mapa.")));
+        }
+      }
+    } catch (e) {
+      debugPrint("Erro ao abrir mapa: $e");
+    }
   }
+
+  // 🏷️ BADGE ESTILIZADO E COMPACTO
+  Widget _infoBadge(IconData icon, String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withOpacity(0.2))),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 14),
+          const SizedBox(width: 6),
+          Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
 }
