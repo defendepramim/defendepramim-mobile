@@ -27,6 +27,7 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
   }
 
   // ✨ BUSCA ORGANIZADOS E CANCELADOS
+  // ✨ BUSCA ORGANIZADOS E CANCELADOS (Matemática Blindada)
   Stream<Map<String, int>> _getEstatisticasContratante(String? uid) {
     if (uid == null) return Stream.value({'organizados': 0, 'cancelados': 0});
 
@@ -39,12 +40,21 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
       int cancelados = 0;
 
       for (var doc in snapshot.docs) {
-        final status = (doc.data()['status'] ?? '').toString().toLowerCase().trim();
-        if (status == 'cancelado') {
+        final data = doc.data();
+        final status = (data['status'] ?? '').toString().toLowerCase().trim();
+        final canceladoPor = (data['canceladoPor'] ?? '').toString().toLowerCase().trim();
+
+        // 🔴 SOMA CANCELAMENTO: Apenas se o status for cancelado E a culpa for do contratante
+        if (status == 'cancelado' && canceladoPor == 'contratante') {
           cancelados++;
-        } else {
+        } 
+        // 🟢 SOMA SUCESSO: Apenas jogos que realmente aconteceram e foram pagos
+        else if (status == 'finalizado') {
           organizados++;
         }
+        
+        // 👻 BURACO NEGRO: Jogos 'abertos' (futuros ou expirados sem goleiro), 
+        // 'fechados' (ainda não jogados) ou cancelados por terceiros são sumariamente ignorados na matemática!
       }
 
       return {
@@ -53,10 +63,50 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
       };
     });
   }
+  
+  // 📸 1. MENU DE OPÇÕES (Galeria ou Câmera)
+  void _abrirMenuDeFoto() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E), // Fundo padrão do app
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Text("Atualizar Foto", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded, color: primaryColor),
+              title: const Text("Escolher da Galeria", style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickAndUploadImage(ImageSource.gallery); // Chama a função passando Galeria
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_rounded, color: primaryColor),
+              title: const Text("Tirar Foto com a Câmera", style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickAndUploadImage(ImageSource.camera); // Chama a função passando Câmera
+              },
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
 
-  Future<void> _pickAndUploadImage() async {
+  // ☁️ 2. FUNÇÃO DE UPLOAD ATUALIZADA (Agora aceita a fonte da imagem)
+  Future<void> _pickAndUploadImage(ImageSource source) async {
     final picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 50);
+    // Usa a fonte selecionada no menu (Câmera ou Galeria)
+    final XFile? image = await picker.pickImage(source: source, imageQuality: 50);
 
     if (image == null) return;
     setState(() => _carregandoFoto = true);
@@ -65,19 +115,61 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
+      // ⚠️ ATENÇÃO: Mude 'perfil_contratantes' para 'perfil_goleiros' quando for no arquivo do Goleiro!
       final storageRef = FirebaseStorage.instance.ref().child('perfil_contratantes').child('${user.uid}.jpg');
       await storageRef.putFile(File(image.path));
       final String downloadUrl = await storageRef.getDownloadURL();
 
       await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).update({'fotoUrl': downloadUrl});
 
-      if (mounted) _showSnackBarOriginal("Foto atualizada!", Colors.green);
+      if (mounted) _showSnackBarOriginal("Foto atualizada com sucesso!", Colors.green);
     } catch (e) {
       debugPrint("Erro no upload: $e");
       if (mounted) _showSnackBarOriginal("Erro ao atualizar foto.", Colors.redAccent);
     } finally {
       if (mounted) setState(() => _carregandoFoto = false);
     }
+  }
+
+  // 🔍 3. ZOOM NA FOTO
+  void _verFotoMaximizada(String url) {
+    if (url.isEmpty) return; // Se não tiver foto, não faz nada
+    
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(10), // Margemzinha pra não colar na tela toda
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // InteractiveViewer permite fazer o zoom com os dedos (efeito pinça!)
+            InteractiveViewer(
+              panEnabled: true,
+              minScale: 1.0,
+              maxScale: 4.0,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(15),
+                child: Image.network(url, fit: BoxFit.contain),
+              ),
+            ),
+            // Botãozinho de fechar no topo
+            Positioned(
+              top: 10,
+              right: 10,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(ctx),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(color: Colors.black.withAlpha(128), shape: BoxShape.circle),
+                  child: const Icon(Icons.close_rounded, color: Colors.white, size: 24),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _editarNome(String nomeAtual) async {
@@ -312,22 +404,29 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
   Widget _buildAvatarHorizontal(String url, String nome) {
     return Stack(
       children: [
-        Container(
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: primaryColor.withAlpha(76), width: 2)), // 🧹 Opacity Limpo
-          child: CircleAvatar(
-            radius: 32,
-            backgroundColor: bgAvatar,
-            backgroundImage: url != "" ? NetworkImage(url) : null,
-            child: url == "" ? Text(nome[0].toUpperCase(), style: const TextStyle(fontSize: 24, color: primaryColor, fontWeight: FontWeight.bold)) : null,
+        // 🟢 Clicar na foto em si abre o Zoom!
+        GestureDetector(
+          onTap: () => _verFotoMaximizada(url),
+          child: Container(
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: primaryColor.withAlpha(76), width: 2)), 
+            child: CircleAvatar(
+              radius: 32,
+              backgroundColor: bgAvatar,
+              backgroundImage: url != "" ? NetworkImage(url) : null,
+              child: url == "" ? Text(nome[0].toUpperCase(), style: const TextStyle(fontSize: 24, color: primaryColor, fontWeight: FontWeight.bold)) : null,
+            ),
           ),
         ),
+        
         if (_carregandoFoto) const CircleAvatar(radius: 32, backgroundColor: Colors.black54, child: CircularProgressIndicator(color: primaryColor, strokeWidth: 2)),
+        
+        // 🟢 Clicar no botão da câmera abre o novo Menu Inteligente!
         Positioned(
           bottom: -2,
           right: -2,
           child: GestureDetector(
-            onTap: _pickAndUploadImage,
+            onTap: _abrirMenuDeFoto, // ⬅️ Agora chama nosso menu bonitão
             child: Container(
               padding: const EdgeInsets.all(6),
               decoration: const BoxDecoration(color: primaryColor, shape: BoxShape.circle),

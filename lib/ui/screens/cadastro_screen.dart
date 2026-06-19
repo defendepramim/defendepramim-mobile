@@ -81,7 +81,6 @@ class _TelaCadastroState extends State<TelaCadastro> {
   }
 
   void _mostrarTermos() {
-    // 🟢 MATADOR DE TECLADO: Tira o foco antes de abrir o Modal
     FocusManager.instance.primaryFocus?.unfocus();
 
     showDialog(
@@ -154,8 +153,10 @@ class _TelaCadastroState extends State<TelaCadastro> {
         );
         userUid = userCred.user!.uid;
         
-        await userCred.user!.sendEmailVerification();
-        precisaVerificarEmail = true;
+        // 🟢 EMAIL DE VERIFICAÇÃO DESATIVADO TEMPORARIAMENTE
+        // Quando for lançar o app, basta remover as barras destas duas linhas abaixo:
+        // await userCred.user!.sendEmailVerification();
+        // precisaVerificarEmail = true;
       }
 
       await FirebaseFirestore.instance.collection('usuarios').doc(userUid).set({
@@ -177,9 +178,12 @@ class _TelaCadastroState extends State<TelaCadastro> {
         'criadoEm': FieldValue.serverTimestamp(),
       });
 
-      if (mounted) {
+if (mounted) {
         if (precisaVerificarEmail) {
           await FirebaseAuth.instance.signOut();
+          
+          // 🟢 TRAVA DE SEGURANÇA: Tira a linha amarela do context
+          if (!mounted) return;
           
           showDialog(
             context: context,
@@ -217,7 +221,6 @@ class _TelaCadastroState extends State<TelaCadastro> {
     }
   }
 
-  // 🟢 CORREÇÃO DO BOTÃO VOLTAR
   Future<void> _acaoVoltar() async {
     if (_isGoogleMode) {
       await FirebaseAuth.instance.signOut();
@@ -356,6 +359,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
               controller: _nomeController, 
               label: "Nome Completo", 
               icon: Icons.person_outline, 
+              textCapitalization: TextCapitalization.words, 
               validator: (v) => v!.trim().split(' ').length < 2 ? "Digite nome e sobrenome" : null
             ),
             _input(
@@ -462,6 +466,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
     TextInputAction? action,
     String? Function(String?)? validator,
     void Function(String)? onSubmitted,
+    TextCapitalization textCapitalization = TextCapitalization.none,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -473,6 +478,7 @@ class _TelaCadastroState extends State<TelaCadastro> {
         onFieldSubmitted: onSubmitted,
         inputFormatters: mask != null ? [mask] : [],
         validator: validator,
+        textCapitalization: textCapitalization,
         style: const TextStyle(color: Colors.white, fontSize: 15),
         decoration: InputDecoration(
           labelText: label, 

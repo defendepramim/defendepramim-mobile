@@ -26,10 +26,12 @@ dependencies:
   google_maps_flutter: ^2.17.1
   geolocator: ^14.0.2
   geocoding: ^4.0.0
-  google_sign_in: 6.1.4
+  google_sign_in: ^6.1.4
   permission_handler: ^12.0.3
   url_launcher: ^6.3.2
-google_sign_in: ^6.1.4
+  flutter_dotenv: ^6.0.1
+  http: ^1.6.0
+  uuid: ^4.5.3
 
 dev_dependencies:
   flutter_test:
@@ -38,7 +40,6 @@ dev_dependencies:
   # 🪄 PACOTE ADICIONADO AQUI
   flutter_launcher_icons: ^0.13.1
 
-# ⚙️ CONFIGURAÇÃO DO ÍCONE
 # ⚙️ CONFIGURAÇÃO DO ÍCONE
 flutter_launcher_icons:
   android: "launcher_icon"

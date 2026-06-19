@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'core/app.dart';
 
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -12,20 +13,19 @@ void main() async {
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
   ]);
 
-  // 🎨 O TOQUE DO MASTER UI/UX: Barras de sistema elegantes e integradas ao Dark Mode
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent, // Topo 100% vazado para a cor do app
-    statusBarIconBrightness: Brightness.light, // Ícones de hora/bateria brancos no Android
-    statusBarBrightness: Brightness.dark, // Ícones de hora/bateria brancos no iOS (iPhone)
-    systemNavigationBarColor: Color(0xFF121212), // Mesma cor do seu Scaffold para camuflagem total
-    systemNavigationBarIconBrightness: Brightness.light, // Botões de navegação brancos
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    statusBarBrightness: Brightness.dark,
+    systemNavigationBarColor: Color(0xFF121212),
+    systemNavigationBarIconBrightness: Brightness.light,
   ));
 
   try {
     await Firebase.initializeApp();
     debugPrint("Firebase OK!");
   } catch (e) {
-    debugPrint("Erro Firebase: $e");
+    debugPrint("🚨 Erro Firebase: $e");
   }
 
   runApp(

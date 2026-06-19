@@ -30,11 +30,11 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
   double valorJogo = 0.0;
   bool _processando = false;
 
-  // ✨ VARIÁVEIS DINÂMICAS DO FIREBASE (Novas regras de Pricing Tierizado)
+  // ✨ VARIÁVEIS DINÂMICAS DO FIREBASE
   bool _carregandoConfig = true;
   int _horasAntecedencia = 2;
+  int _tempoDeslocamentoMin = 30; 
 
-  // 1️⃣ NOVAS VARIÁVEIS GLOBAIS DE PRICING (Valores fixos por hora)
   double _precoVarzea = 35.0;
   double _precoInter = 36.0;
   double _precoElite = 38.0;
@@ -43,15 +43,14 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
   double _taxaAppInter = 6.0;
   double _taxaAppElite = 8.0;
 
-  // Variáveis para carimbar o Crowdsourcing do mapa
   String nomeQuadraSalvar = "";
   String enderecoRuaSalvar = "";
 
   final TextEditingController _cLoc = TextEditingController();
   final TextEditingController _cObs = TextEditingController();
 
-bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
-  bool get localOk => localSelecionado.isNotEmpty && latitudeJogo != null && longitudeJogo != null; // 🟢 TRAVA DE GPS AQUI!
+  bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
+  bool get localOk => localSelecionado.isNotEmpty && latitudeJogo != null && longitudeJogo != null;
   bool get nivelOk => nivelGoleiro.isNotEmpty;
   bool get tudoPronto => dataOk && localOk && nivelOk;
   double? latitudeJogo;
@@ -72,19 +71,16 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     super.dispose();
   }
 
-  // 2️⃣ LEITURA DOS VALORES ATUALIZADOS DO FIREBASE
   Future<void> _buscarConfiguracoesGlobais() async {
     try {
       final doc = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
       if (doc.exists) {
         final d = doc.data()!;
         _horasAntecedencia = (d['horasAntecedencia'] ?? 2).toInt();
-        
-        // Puxando os novos tiers de preço e lucro fixo
+        _tempoDeslocamentoMin = (d['tempoDeslocamentoMinutos'] ?? 30).toInt();
         _precoVarzea = (d['precoVarzea'] ?? 35.0).toDouble();
         _precoInter = (d['precoInter'] ?? 36.0).toDouble();
         _precoElite = (d['precoElite'] ?? 38.0).toDouble();
-
         _taxaAppVarzea = (d['taxaAppVarzea'] ?? 5.0).toDouble();
         _taxaAppInter = (d['taxaAppInter'] ?? 6.0).toDouble();
         _taxaAppElite = (d['taxaAppElite'] ?? 8.0).toDouble();
@@ -133,8 +129,6 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     );
   }
 
-  // --- LÓGICA DE DADOS ---
-
   void carregarDadosEdicao() {
     setState(() {
       localSelecionado = widget.dados!["local"] ?? "";
@@ -176,67 +170,59 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     }
   }
 
-  // --- PROCESSAMENTO E FINANCEIRO ---
-
-  Future<void> validarEProcessar() async {
-    setState(() => _processando = true);
+  // 🟢 NOVO MÉTODO: Checa os conflitos de agenda blindando antes e depois do jogo!
+  Future<String?> _verificarConflitoAgenda(DateTime inicioNovoJogo, int duracaoMinutos) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) {
-      setState(() => _processando = false);
-      return;
-    }
+    if (uid == null) return null;
 
-    final DateTime agoraReal = await _obterHoraCertaServidor();
-
-    final DateTime jogoDT = DateTime(
-      dataSelecionada!.year,
-      dataSelecionada!.month,
-      dataSelecionada!.day,
-      horarioSelecionado!.hour,
-      horarioSelecionado!.minute,
-    );
-
-    if (jogoDT.isBefore(agoraReal.add(Duration(hours: _horasAntecedencia)))) {
-      setState(() => _processando = false);
-      _msgErro("A convocação exige $_horasAntecedencia horas de antecedência mínima!");
-      return;
-    }
-
-    final DateTime inicioNovoJogo = jogoDT;
-    final DateTime fimNovoJogo = jogoDT.add(Duration(minutes: duracaoSelecionada));
+    final fimNovoJogo = inicioNovoJogo.add(Duration(minutes: duracaoMinutos));
 
     final conflitos = await FirebaseFirestore.instance
         .collection('jogos')
         .where('idContratante', isEqualTo: uid)
-        .where('status', isEqualTo: 'aberto')
+        .where('status', whereIn: ['aberto', 'fechado']) 
         .get();
-
-    String? msgConflito;
 
     for (var doc in conflitos.docs) {
       if (widget.dados != null && doc.id == widget.dados!["id"]) continue;
 
       DateTime inicioExistente = (doc['dataHora'] as Timestamp).toDate();
-      final dynamic duracaoRaw = doc['duracao'];
-      int duracaoExMinutos = (duracaoRaw is int) ? duracaoRaw : 60;
-
+      int duracaoExMinutos = (doc['duracao'] is int) ? doc['duracao'] : 60;
       DateTime fimExistente = inicioExistente.add(Duration(minutes: duracaoExMinutos));
+      
       String localEx = doc['local'] ?? "outro local";
       String horaEx = doc['horaExibicao'] ?? "--:--";
 
-      if (inicioNovoJogo.isBefore(fimExistente) && fimNovoJogo.isAfter(inicioExistente)) {
-        String duracaoFormatada = duracaoExMinutos >= 60
-            ? "${(duracaoExMinutos / 60).toStringAsFixed(1)}h"
-            : "$duracaoExMinutos min";
+      // Presume deslocamento se for local diferente ou se ele ainda não preencheu o local atual
+      bool precisaDeslocamento = localSelecionado.isEmpty || (localEx.toLowerCase() != localSelecionado.toLowerCase());
+      
+      // Pega o tempo de deslocamento do Firebase (se não precisar, vira 0)
+      int tempoExtra = precisaDeslocamento ? _tempoDeslocamentoMin : 0;
 
-        msgConflito = "Conflito de agenda! Você já tem uma convocação às $horaEx im $localEx (Duração: $duracaoFormatada).";
-        break;
+      // 🛡️ O SEGREDO ESTÁ AQUI: Cria um "escudo" antes e depois do jogo que já existe
+      DateTime inicioExComBuffer = inicioExistente.subtract(Duration(minutes: tempoExtra));
+      DateTime fimExComBuffer = fimExistente.add(Duration(minutes: tempoExtra));
+
+      // Verifica se o novo jogo entra no meio do jogo existente (ou dentro do seu escudo de deslocamento)
+      if (inicioNovoJogo.isBefore(fimExComBuffer) && fimNovoJogo.isAfter(inicioExComBuffer)) {
+        String durFormat = duracaoExMinutos >= 60 ? "${(duracaoExMinutos / 60).toStringAsFixed(1)}h" : "$duracaoExMinutos min";
+
+        if (tempoExtra > 0) {
+           return "Conflito! Você já tem convocação às $horaEx em '$localEx'. O sistema exige $_tempoDeslocamentoMin min de intervalo para deslocamento.";
+        } else {
+           return "Conflito de agenda! Você já tem convocação às $horaEx (Duração: $durFormat).";
+        }
       }
     }
+    return null; // Tudo limpo!
+  }
 
-    if (msgConflito != null) {
+  // 🟢 MÉTODO REDUZIDO E LIMPO: Apenas validação financeira antes do final
+  Future<void> validarEProcessar() async {
+    setState(() => _processando = true);
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
       setState(() => _processando = false);
-      _msgErro(msgConflito);
       return;
     }
 
@@ -258,7 +244,6 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     }
   }
 
-  // --- INTERFACE PRINCIPAL ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -302,7 +287,6 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
                       onTap: _abrirModuloTempo,
                     ),
 
-                    // 🗺️ CARD DE LOCAL TOTALMENTE DIRECIONADO PRO MAPA PREMIUM COM BUSCA
                     _cardModuloMaster(
                       titulo: localOk ? localSelecionado : "Local e Detalhes",
                       subtitulo: localOk ? (observacoes.isEmpty ? "Toque para alterar o local" : observacoes) : "Onde vai ser o jogo?",
@@ -457,22 +441,58 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     );
   }
 
-  // 3️⃣ CÁLCULO DE PREÇO TIERIZADO (MÓDULO DE SELEÇÃO DE TEMPO)
+// 🟢 ABERTURA DO MODAL: Injetando a inteligência para validar dentro do Picker!
   void _abrirModuloTempo() async {
-    final res = await Navigator.push(context, MaterialPageRoute(builder: (context) => TelaSelecaoTempo(dataInicial: dataSelecionada, horaInicial: horarioSelecionado)));
+    setState(() => _processando = true);
 
-    if (res != null && res is DadosTempo) {
-      setState(() {
-        dataSelecionada = res.data;
-        horarioSelecionado = res.hora;
-        duracaoSelecionada = res.duracao;
+    try {
+      final DateTime agoraReal = await _obterHoraCertaServidor();
+      setState(() => _processando = false);
 
-        if (nivelOk) {
-          double precoBase = nivelGoleiro.contains("Elite") ? _precoElite : nivelGoleiro.contains("Inter") ? _precoInter : _precoVarzea;
-          double horasJogadas = duracaoSelecionada / 60;
-          valorJogo = precoBase * horasJogadas; 
-        }
-      });
+      final res = await Navigator.push(
+        context, 
+        MaterialPageRoute(
+          builder: (context) => TelaSelecaoTempo(
+            dataInicial: dataSelecionada, 
+            horaInicial: horarioSelecionado,
+            
+            // Injetamos a validação dinâmica do Firebase direto pro botão do Picker!
+            validadorExterno: (dataHoraDesejada, duracaoMinutos) async {
+              
+              // 1. Usa o "_horasAntecedencia" (2) do Firebase para bloquear o passado próximo
+              if (dataHoraDesejada.isBefore(agoraReal.add(Duration(hours: _horasAntecedencia)))) {
+                return "A convocação exige $_horasAntecedencia horas de antecedência mínima!";
+              }
+
+              // 2. Aciona o verificador de conflitos ajustado com o tempo do ADM (0)
+              String? msgConflito = await _verificarConflitoAgenda(dataHoraDesejada, duracaoMinutos);
+              if (msgConflito != null) {
+                return msgConflito; 
+              }
+
+              return null; // Tudo verde, pode fechar a tela de tempo!
+            },
+          ),
+        ),
+      );
+
+      // Só chega aqui se o usuário passou pelas regras do ADM e confirmou.
+      if (res != null && res is DadosTempo) {
+        setState(() {
+          dataSelecionada = res.data;
+          horarioSelecionado = res.hora;
+          duracaoSelecionada = res.duracao;
+
+          if (nivelOk) {
+            double precoBase = nivelGoleiro.contains("Elite") ? _precoElite : nivelGoleiro.contains("Inter") ? _precoInter : _precoVarzea;
+            double horasJogadas = duracaoSelecionada / 60;
+            valorJogo = precoBase * horasJogadas; 
+          }
+        });
+      }
+    } catch (e) {
+      setState(() => _processando = false);
+      _msgErro("Erro de sincronização. Verifique sua conexão e tente novamente.");
     }
   }
 
@@ -480,9 +500,8 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
-      // 🛡️ useSafeArea: true ajuda em versões mais novas do Flutter
       useSafeArea: true, 
-      builder: (ctx) => SafeArea( // 🛡️ A ARMADURA PRINCIPAL AQUI
+      builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -493,14 +512,13 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
             _opcaoNivel("Várzea (Livre)", _precoVarzea),
             _opcaoNivel("Intermediário (Médio)", _precoInter),
             _opcaoNivel("Elite (Master)", _precoElite),
-            const SizedBox(height: 10), // Pode diminuir pra 10, a SafeArea já dá a margem do sistema!
+            const SizedBox(height: 10), 
           ],
         ),
       ),
     );
   }
 
-  // 3️⃣ CÁLCULO DE PREÇO TIERIZADO (MÓDULO DE SELEÇÃO DE NÍVEL)
   Widget _opcaoNivel(String nome, double precoBase) {
     return ListTile(
       title: Text(nome, style: const TextStyle(color: Colors.white)),
@@ -645,7 +663,6 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
     );
   }
 
-  // 4️⃣ CALCULAR O LUCRO E SALVAR NO BANCO!
   Future<void> salvarNoFirebase() async {
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -692,7 +709,6 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
           });
         }
 
-        // 💰 MATEMÁTICA DA COMISSÃO EM REAIS POR HORA
         double taxaBaseFixa = nivelGoleiro.contains("Elite") 
             ? _taxaAppElite 
             : nivelGoleiro.contains("Inter") 
@@ -722,18 +738,15 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
               "criadoEm": widget.dados?["criadoEm"] ?? FieldValue.serverTimestamp(), 
               "editadoEm": FieldValue.serverTimestamp(),
               
-              // 🟢 AQUI ESTÁ O TRUQUE MESTRE: GeoPoint nativo do Firebase!
               "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
-              "latitude": latitudeJogo, // Mantemos separados também se você quiser usar no app sem converter
+              "latitude": latitudeJogo, 
               "longitude": longitudeJogo,
               
-              // Carimbando as novas métricas financeiras tierizadas fixas
-              "taxaAplicada": comissaoTotalDesseJogo,      // O lucro real do app
-              "valorGoleiro": liquidoDoGoleiro,             // O repasse limpo do goleiro
+              "taxaAplicada": comissaoTotalDesseJogo,      
+              "valorGoleiro": liquidoDoGoleiro,            
             },
             SetOptions(merge: true));
 
-        // 🧠 CROWDSOURCING: Sugere a nova quadra para validação do Admin
         if (widget.dados == null) { 
           DocumentReference novaQuadraRef = FirebaseFirestore.instance.collection('quadras').doc();
           
@@ -743,7 +756,6 @@ bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
             "endereco": enderecoRuaSalvar,  
             "observacoes": observacoes,
             
-            // 🟢 E salvamos no GeoPoint da Quadra sugerida também!
             "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
             "latitude": latitudeJogo,
             "longitude": longitudeJogo,

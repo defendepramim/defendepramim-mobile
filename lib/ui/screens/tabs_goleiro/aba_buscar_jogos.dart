@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart'; // 🟢 INJETADO PARA OS CÁLCULOS
-import 'package:url_launcher/url_launcher.dart'; // 🟢 INJETADO PARA ABRIR O MAPA
+import 'package:geolocator/geolocator.dart'; 
+import 'package:url_launcher/url_launcher.dart'; 
 
 class AbaBuscarJogos extends StatefulWidget {
   const AbaBuscarJogos({super.key});
@@ -39,7 +39,7 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
 
   Future<void> _inicializarDados() async {
     await _sincronizarRelogio();
-    await _pegarLocalizacaoGoleiro(); // 🌍 Pega o GPS logo na entrada
+    await _pegarLocalizacaoGoleiro(); 
     
     if (mounted) {
       _timer = Timer.periodic(const Duration(seconds: 30), (timer) {
@@ -48,7 +48,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     }
   }
 
-  // 🌍 FUNÇÃO PARA PEGAR O GPS
   Future<void> _pegarLocalizacaoGoleiro() async {
     try {
       bool servicoAtivo = await Geolocator.isLocationServiceEnabled();
@@ -70,7 +69,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     } catch (e) {
       if (mounted) {
         setState(() => _buscandoGPS = false);
-        // Se der erro no GPS, mostra os jogos de qualquer distância.
       }
     }
   }
@@ -246,7 +244,8 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
         backgroundColor: const Color(0xFF1E1E1E),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(28),
-          side: BorderSide(color: Colors.white.withOpacity(0.05)),
+          // withOpacity(0.05) -> withAlpha(13)
+          side: BorderSide(color: Colors.white.withAlpha(13)),
         ),
         title: Row(
           children: [
@@ -262,7 +261,8 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
             child: ElevatedButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
               style: ElevatedButton.styleFrom(
-                backgroundColor: corDestaque.withOpacity(0.1),
+                // withOpacity(0.1) -> withAlpha(26)
+                backgroundColor: corDestaque.withAlpha(26),
                 foregroundColor: corDestaque,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
@@ -281,77 +281,80 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            backgroundColor: Colors.black,
-            floating: true,
-            pinned: true, // Deixa a barra presa no topo para o filtro não sumir
-            title: const Text("Jogos Disponíveis", style: TextStyle(fontWeight: FontWeight.bold)),
-            bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(60),
-              child: _buildFiltroRaio(), // 🎚️ NOSSA BARRA DE QUILOMETRAGEM AQUI!
-            ),
-          ),
+      // 🟢 O STREAMBUILDER AGORA ENVOLVE TUDO PARA CONSEGUIR CONTAR OS JOGOS ANTES DE DESENHAR O CABEÇALHO
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('jogos').where('status', isEqualTo: 'aberto').snapshots(),
+        builder: (context, snapshot) {
           
-          if (_buscandoGPS)
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.all(40),
-                child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+          final documentosFiltrados = <DocumentSnapshot>[];
+          final distanciasMap = <String, double>{};
+
+          // Só processa a lista se tiver carregado e não estiver buscando GPS
+          if (snapshot.hasData && !_buscandoGPS) {
+            for (var doc in snapshot.data!.docs) {
+              final dados = doc.data() as Map<String, dynamic>;
+              final List desistentes = dados['desistentes'] ?? [];
+              if (desistentes.contains(uidGoleiro)) continue;
+              
+              final DateTime dtAbsoluta = (dados['dataHora'] as Timestamp).toDate();
+              if (dtAbsoluta.isBefore(agoraReal)) continue;
+
+              double distanciaCalculada = 999.0; 
+              if (_posicaoGoleiro != null && dados['localizacao'] is GeoPoint) {
+                final GeoPoint localJogo = dados['localizacao'];
+                distanciaCalculada = Geolocator.distanceBetween(
+                  _posicaoGoleiro!.latitude, _posicaoGoleiro!.longitude,
+                  localJogo.latitude, localJogo.longitude
+                ) / 1000; 
+              }
+
+              if (distanciaCalculada <= _raioBuscaKm) {
+                documentosFiltrados.add(doc);
+                distanciasMap[doc.id] = distanciaCalculada;
+              }
+            }
+
+            documentosFiltrados.sort((a, b) {
+              final dtA = (a.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
+              final dtB = (b.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
+              return dtA.compareTo(dtB);
+            });
+          }
+
+          final int qtdJogosFiltrados = documentosFiltrados.length;
+
+          return CustomScrollView(
+            slivers: [
+              SliverAppBar(
+                backgroundColor: Colors.black,
+                floating: true,
+                pinned: true, 
+                title: const Text("Jogos Disponíveis", style: TextStyle(fontWeight: FontWeight.bold)),
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(70), 
+                  // 🟢 PASSANDO O NÚMERO DE JOGOS PRO CABEÇALHO
+                  child: _buildFiltroRaio(qtdJogosFiltrados), 
+                ),
               ),
-            )
-          else
-            StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('jogos').where('status', isEqualTo: 'aberto').snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) return const SliverToBoxAdapter(child: Center(child: Text("Erro ao carregar")));
-                if (!snapshot.hasData) return const SliverToBoxAdapter(child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))));
-
-                final documentosFiltrados = <DocumentSnapshot>[];
-                final distanciasMap = <String, double>{}; // Guarda a distância pré-calculada para não rodar o cálculo toda hora
-
-                for (var doc in snapshot.data!.docs) {
-                  final dados = doc.data() as Map<String, dynamic>;
-                  final List desistentes = dados['desistentes'] ?? [];
-                  if (desistentes.contains(uidGoleiro)) continue;
-                  
-                  final DateTime dtAbsoluta = (dados['dataHora'] as Timestamp).toDate();
-                  if (dtAbsoluta.isBefore(agoraReal)) continue;
-
-                  // 🌍 CÁLCULO DA DISTÂNCIA
-                  double distanciaCalculada = 999.0; // Se não tiver GPS, joga lá pra longe
-                  if (_posicaoGoleiro != null && dados['localizacao'] is GeoPoint) {
-                    final GeoPoint localJogo = dados['localizacao'];
-                    distanciaCalculada = Geolocator.distanceBetween(
-                      _posicaoGoleiro!.latitude, _posicaoGoleiro!.longitude,
-                      localJogo.latitude, localJogo.longitude
-                    ) / 1000; // Divide por mil para transformar Metros em Km
-                  }
-
-                  // Só adiciona na lista se estiver DENTRO do raio de busca
-                  if (distanciaCalculada <= _raioBuscaKm) {
-                    documentosFiltrados.add(doc);
-                    distanciasMap[doc.id] = distanciaCalculada;
-                  }
-                }
-
-                documentosFiltrados.sort((a, b) {
-                  final dtA = (a.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
-                  final dtB = (b.data() as Map<String, dynamic>)['dataHora'] as Timestamp;
-                  return dtA.compareTo(dtB);
-                });
-
-                if (documentosFiltrados.isEmpty) {
-                  return const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.only(top: 80),
-                      child: Center(child: Text("Nenhum jogo no seu raio de busca. ⚽", style: TextStyle(color: Colors.grey, fontSize: 16))),
-                    ),
-                  );
-                }
-
-                return SliverPadding(
+              
+              if (_buscandoGPS || !snapshot.hasData)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+                  ),
+                )
+              else if (snapshot.hasError)
+                const SliverToBoxAdapter(child: Center(child: Text("Erro ao carregar", style: TextStyle(color: Colors.white))))
+              else if (documentosFiltrados.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: 80),
+                    child: Center(child: Text("Nenhum jogo no seu raio de busca. ⚽", style: TextStyle(color: Colors.grey, fontSize: 16))),
+                  ),
+                )
+              else
+                SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
@@ -364,38 +367,69 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
                       childCount: documentosFiltrados.length,
                     ),
                   ),
-                );
-              },
-            ),
-        ],
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  // 🎚️ WIDGET DO SLIDER DE QUILOMETRAGEM
-  Widget _buildFiltroRaio() {
+  // 🎚️ WIDGET DO SLIDER COM CONTADOR DE JOGOS
+  Widget _buildFiltroRaio(int qtdJogos) {
     return Container(
       color: Colors.black,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10), 
       child: Row(
         children: [
           const Icon(Icons.radar_rounded, color: Colors.grey, size: 20),
-          const SizedBox(width: 10),
-          Text("Raio: ${_raioBuscaKm.toInt()}km", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          const SizedBox(width: 6), 
+          
+          Flexible(
+            flex: 2, 
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  Text(
+                    "Raio: ${_raioBuscaKm.toInt()}km", 
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
+                  ),
+                  const SizedBox(width: 8),
+                  // 🟢 O NOVO BADGE DE CONTAGEM EM TEMPO REAL
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: primaryColor,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      "$qtdJogos", 
+                      style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12)
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
           Expanded(
+            flex: 5, 
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 activeTrackColor: primaryColor,
                 inactiveTrackColor: Colors.white12,
                 thumbColor: primaryColor,
-                overlayColor: primaryColor.withOpacity(0.2),
+                // withOpacity(0.2) -> withAlpha(51)
+                overlayColor: primaryColor.withAlpha(51),
                 trackHeight: 2.0,
               ),
               child: Slider(
                 value: _raioBuscaKm,
                 min: 5.0,
                 max: 100.0,
-                divisions: 19, // Pulos de 5 em 5km
+                divisions: 19, 
                 onChanged: (val) => setState(() => _raioBuscaKm = val),
               ),
             ),
@@ -405,8 +439,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     );
   }
 
-  // 🌍 CARD COM NOVO VISUAL E DISTÂNCIA
-  // 🌍 CARD PREMIUM DE BUSCA (PADRÃO UBER/IFOOD)
   Widget _buildCardBusca(BuildContext context, Map<String, dynamic> jogo, String id, double distanciaEmKm) {
     final bool isProcessing = _jogoProcessando == id;
 
@@ -425,7 +457,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
 
     final bool isNear = dataAlvoReal.difference(_obterHoraRealAgora()).inHours < 2;
     
-    // Separa o Nome da Quadra do Endereço (Ex: "Arena Soccer (Rua X, 123)")
     final String localCompleto = jogo['local'] ?? 'Endereço não informado';
     final List<String> partesLocal = localCompleto.split('(');
     final String nomeQuadra = partesLocal[0].trim();
@@ -436,19 +467,21 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: isNear ? Colors.orange.withOpacity(0.4) : Colors.white.withOpacity(0.05)),
+        // withOpacity(0.4) -> withAlpha(102) | withOpacity(0.05) -> withAlpha(13)
+        border: Border.all(color: isNear ? Colors.orange.withAlpha(102) : Colors.white.withAlpha(13)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5)),
+          // withOpacity(0.3) -> withAlpha(77)
+          BoxShadow(color: Colors.black.withAlpha(77), blurRadius: 10, offset: const Offset(0, 5)),
         ]
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 💰 HIERARQUIA 1: O VALOR (O que importa primeiro)
           Container(
             padding: const EdgeInsets.only(left: 20, right: 20, top: 20, bottom: 15),
             decoration: BoxDecoration(
-              color: primaryColor.withOpacity(0.05),
+              // withOpacity(0.05) -> withAlpha(13)
+              color: primaryColor.withAlpha(13),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             ),
             child: Row(
@@ -458,7 +491,8 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("VOCÊ GANHA", style: TextStyle(color: primaryColor.withOpacity(0.8), fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1)),
+                    // withOpacity(0.8) -> withAlpha(204)
+                    Text("VOCÊ GANHA", style: TextStyle(color: primaryColor.withAlpha(204), fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1)),
                     const SizedBox(height: 2),
                     Text("R\$ ${jogo['valorGoleiro'] ?? jogo['valor']}", style: TextStyle(color: primaryColor, fontWeight: FontWeight.w900, fontSize: 28)),
                   ],
@@ -473,7 +507,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 📍 HIERARQUIA 2: O LOCAL E O MAPA
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -492,13 +525,13 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
                         ],
                       ),
                     ),
-                    // BOTÃO DE ABRIR O MAPA
                     if (jogo['latitude'] != null && jogo['longitude'] != null)
                       IconButton(
                         onPressed: () => _abrirNoMapaNativo(jogo['latitude'], jogo['longitude']),
                         icon: Container(
                           padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                          // withOpacity(0.1) -> withAlpha(26)
+                          decoration: BoxDecoration(color: Colors.blueAccent.withAlpha(26), borderRadius: BorderRadius.circular(10)),
                           child: const Icon(Icons.map_rounded, color: Colors.blueAccent, size: 20),
                         ),
                         tooltip: "Abrir Rota",
@@ -511,7 +544,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
                   child: Divider(color: Colors.white10, height: 1),
                 ),
                 
-                // ⏳ HIERARQUIA 3: OS BADGES (Tempo, Data e Distância)
                 Wrap(
                   spacing: 8,
                   runSpacing: 10,
@@ -525,7 +557,6 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
                 
                 const SizedBox(height: 24),
                 
-                // 🚀 AÇÃO FINAL
                 SizedBox(
                   width: double.infinity,
                   height: 52,
@@ -535,7 +566,8 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
                       backgroundColor: isProcessing ? Colors.grey[800] : primaryColor,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       elevation: isNear ? 8 : 2,
-                      shadowColor: primaryColor.withOpacity(0.5),
+                      // withOpacity(0.5) -> withAlpha(128)
+                      shadowColor: primaryColor.withAlpha(128),
                     ),
                     child: isProcessing
                         ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
@@ -550,14 +582,11 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     );
   }
 
-  // 🗺️ FUNÇÃO QUE ABRE O GOOGLE MAPS / WAZE DO CELULAR
   Future<void> _abrirNoMapaNativo(double lat, double lng) async {
-    // Monta a URL padrão universal do Google Maps (Funciona no Android e iOS)
     final Uri url = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
-    
     try {
       if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication); // Força abrir no app de mapa, não no navegador interno
+        await launchUrl(url, mode: LaunchMode.externalApplication); 
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Não foi possível abrir o mapa.")));
@@ -568,11 +597,11 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
     }
   }
 
-  // 🏷️ BADGE ESTILIZADO E COMPACTO
   Widget _infoBadge(IconData icon, String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withOpacity(0.2))),
+      // withOpacity(0.1) -> withAlpha(26) | withOpacity(0.2) -> withAlpha(51)
+      decoration: BoxDecoration(color: color.withAlpha(26), borderRadius: BorderRadius.circular(8), border: Border.all(color: color.withAlpha(51))),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -583,5 +612,4 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
       ),
     );
   }
-
 }

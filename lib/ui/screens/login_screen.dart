@@ -75,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   /// 🔑 LÓGICA: LOGIN
+  /// 🔑 LÓGICA: LOGIN
   Future<void> _fazerLogin() async {
     final email = _emailController.text.trim().toLowerCase();
     final senha = _senhaController.text.trim();
@@ -89,6 +90,10 @@ class _LoginScreenState extends State<LoginScreen> {
     // Fecha o teclado antes de iniciar o processo pesado de login
     FocusManager.instance.primaryFocus?.unfocus(); 
 
+    // 🧹 MÁGICA AQUI: Limpa qualquer SnackBar antigo que tenha ficado "preso" na tela
+    // antes de processar uma nova tentativa de login com outra conta.
+    ScaffoldMessenger.of(context).clearSnackBars();
+
     try {
       final userCred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
@@ -97,9 +102,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final user = userCred.user;
 
-      // 🟢 A PORTA GIRATÓRIA DA SEGURANÇA: Verifica se o e-mail foi validado
+      // 🚧 RETIRADO POR ENQUANTO: Para reativar a obrigatoriedade de verificar o e-mail,
+      // basta remover os comentários ( /* e */ ) deste bloco abaixo:
+      
+      /*
       if (user != null && !user.emailVerified) {
-        // O e-mail não foi verificado ainda!
         await FirebaseAuth.instance.signOut(); // Desloga o teimoso na hora
         
         if (mounted) {
@@ -108,12 +115,17 @@ class _LoginScreenState extends State<LoginScreen> {
               content: const Text("Você precisa verificar seu e-mail antes de entrar."),
               backgroundColor: Colors.orangeAccent,
               behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 5),
+              duration: const Duration(seconds: 6),
+              showCloseIcon: true, // ❌ COLOCA O 'X' PARA FECHAR MANUALMENTE
+              closeIconColor: Colors.black,
               action: SnackBarAction(
-                label: 'REENVIAR E-MAIL',
+                label: 'REENVIAR',
                 textColor: Colors.black,
                 backgroundColor: const Color(0xFF00E676),
                 onPressed: () async {
+                  // Oculte o SnackBar imediatamente ao clicar antes de rodar o async
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  
                   try {
                      final tempUser = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: senha);
                      await tempUser.user!.sendEmailVerification();
@@ -129,8 +141,9 @@ class _LoginScreenState extends State<LoginScreen> {
         }
         return; // Interrompe o login e não deixa passar pra Home!
       }
+      */
 
-      // Se passou pela porta giratória (e-mail tá ok), vai pra Home!
+      // Se passou pela validação, vai pra Home!
       if (mounted) {
         Navigator.pop(context); // Fecha a tela de login
       }

@@ -11,112 +11,187 @@ class AbaMeusJogos extends StatefulWidget {
 }
 
 class _AbaMeusJogosState extends State<AbaMeusJogos> {
-  // 🧹 AQUI FORAM REMOVIDAS AS CHECAGENS AUTOMÁTICAS E O POP-UP DE ALERTA!
-  // Agora a tela apenas lê o Firebase, e o Robô na nuvem faz o trabalho duro.
+  final Color primaryColor = const Color(0xFF00E676);
+  final Color surfaceColor = const Color(0xFF1E1E1E);
 
   @override
   Widget build(BuildContext context) {
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
-    const primaryColor = Color(0xFF00E676);
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('jogos')
-            .where('idContratante', isEqualTo: uid)
-            .orderBy('dataHora', descending: false)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const Center(child: Text("Erro ao carregar jogos", style: TextStyle(color: Colors.white)));
-          }
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: primaryColor));
-          }
-
-          final documentos = snapshot.data?.docs ?? [];
-          
-          if (documentos.isEmpty) return _buildEmptyState();
-
-          final agora = DateTime.now();
-
-          // --- FILTROS DE CATEGORIA ---
-          
-          // 1. EM DISPUTA (Urgência máxima)
-          final contestados = documentos.where((doc) => doc['status'] == 'contestado').toList();
-          
-          // 2. FINALIZAR E PAGAR (Já passou do horário de término)
-          final pendentesAcao = documentos.where((doc) {
-            if (doc['status'] != 'fechado') return false;
-            final dt = (doc['dataHora'] as Timestamp).toDate();
-            final fim = dt.add(Duration(minutes: doc['duracao'] ?? 60));
-            return agora.isAfter(fim) || agora.isAtSameMomentAs(fim); // Bola já parou de rolar
-          }).toList();
-
-          // 3. EM ANDAMENTO (Bola rolando AGORA!)
-          final emAndamento = documentos.where((doc) {
-            if (doc['status'] != 'fechado') return false;
-            final dt = (doc['dataHora'] as Timestamp).toDate();
-            final fim = dt.add(Duration(minutes: doc['duracao'] ?? 60));
-            return agora.isAfter(dt) && agora.isBefore(fim); // Passou do início, mas não chegou no fim
-          }).toList();
-
-          // 4. PRÓXIMAS PARTIDAS (Ainda não começou)
-          final proximos = documentos.where((doc) {
-            final s = doc['status'];
-            if (['cancelado', 'finalizado', 'contestado'].contains(s)) return false;
-            final dt = (doc['dataHora'] as Timestamp).toDate();
-            return agora.isBefore(dt);
-          }).toList();
-
-          // 5. HISTÓRICO
-          final historico = documentos.where((doc) => 
-            ['finalizado', 'cancelado'].contains(doc['status'])).toList();
-
-          return ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            children: [
-              const SizedBox(height: 40),
-              const Text(
-                "Minhas Partidas", 
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: -1)
-              ),
-              const SizedBox(height: 10),
-
-              if (contestados.isNotEmpty) ...[
-                _buildHeader(Icons.gavel_rounded, "EM DISPUTA", Colors.redAccent),
-                ...contestados.map((doc) => _buildCard(doc, primaryColor)),
-              ],
-
-              if (pendentesAcao.isNotEmpty) ...[
-                _buildHeader(Icons.priority_high_rounded, "FINALIZAR E PAGAR", Colors.orangeAccent),
-                ...pendentesAcao.map((doc) => _buildCard(doc, primaryColor)),
-              ],
-
-              if (emAndamento.isNotEmpty) ...[
-                _buildHeader(Icons.sports_soccer, "EM ANDAMENTO", const Color(0xFF00E676)),
-                ...emAndamento.map((doc) => _buildCard(doc, primaryColor)),
-              ],
-
-              if (proximos.isNotEmpty) ...[
-                _buildHeader(Icons.calendar_today_rounded, "PRÓXIMAS PARTIDAS", Colors.blueAccent),
-                ...proximos.map((doc) => _buildCard(doc, primaryColor)),
-              ],
-
-              if (historico.isNotEmpty) ...[
-                _buildHeader(Icons.history_rounded, "HISTÓRICO", Colors.white24),
-                ...historico.map((doc) => _buildCard(doc, primaryColor)),
-              ],
-              
-              const SizedBox(height: 50),
+    // 🟢 AGORA USAMOS O PADRÃO DE ABAS DO GOLEIRO
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          elevation: 0,
+          title: const Text(
+            "Minhas Peladas",
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          bottom: TabBar(
+            indicatorColor: primaryColor,
+            labelColor: primaryColor,
+            unselectedLabelColor: Colors.grey,
+            indicatorWeight: 3,
+            tabs: const [
+              Tab(text: "AGENDA"),
+              Tab(text: "HISTÓRICO"),
             ],
-          );
-        },
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            _buildAbaAgenda(),
+            _buildAbaHistorico(),
+          ],
+        ),
       ),
     );
   }
 
+  // --- 📅 ABA 1: AGENDA (Apenas o que precisa da atenção do Contratante) ---
+  Widget _buildAbaAgenda() {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('jogos')
+          .where('idContratante', isEqualTo: uid)
+          .orderBy('dataHora', descending: false)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const Center(child: Text("Erro ao carregar jogos", style: TextStyle(color: Colors.white)));
+        if (snapshot.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator(color: primaryColor));
+
+        final documentos = snapshot.data?.docs ?? [];
+        if (documentos.isEmpty) return _buildEmptyState();
+
+        final agora = DateTime.now();
+
+        // 1. EM DISPUTA (Urgência máxima)
+        final contestados = documentos.where((doc) => doc['status'] == 'contestado').toList();
+        
+        // 2. FINALIZAR E PAGAR (Já passou do horário de término)
+        final pendentesAcao = documentos.where((doc) {
+          if (doc['status'] != 'fechado') return false;
+          final dt = (doc['dataHora'] as Timestamp).toDate();
+          final fim = dt.add(Duration(minutes: doc['duracao'] ?? 60));
+          return agora.isAfter(fim) || agora.isAtSameMomentAs(fim);
+        }).toList();
+
+        // 3. EM ANDAMENTO (Bola rolando AGORA!)
+        final emAndamento = documentos.where((doc) {
+          if (doc['status'] != 'fechado') return false;
+          final dt = (doc['dataHora'] as Timestamp).toDate();
+          final fim = dt.add(Duration(minutes: doc['duracao'] ?? 60));
+          return agora.isAfter(dt) && agora.isBefore(fim); 
+        }).toList();
+
+        // 4. PRÓXIMAS PARTIDAS (Abertas aguardando goleiro ou fechadas no futuro)
+        final proximos = documentos.where((doc) {
+          final s = doc['status'];
+          final dt = (doc['dataHora'] as Timestamp).toDate();
+          
+          if (s == 'aberto' && agora.isBefore(dt)) return true; // Aberto no futuro
+          if (s == 'fechado' && agora.isBefore(dt)) return true; // Fechado no futuro
+          
+          return false;
+        }).toList();
+
+        if (contestados.isEmpty && pendentesAcao.isEmpty && emAndamento.isEmpty && proximos.isEmpty) {
+          return _buildEmptyState();
+        }
+
+        return ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          children: [
+            const SizedBox(height: 10),
+
+            if (contestados.isNotEmpty) ...[
+              _buildHeader(Icons.gavel_rounded, "EM DISPUTA", Colors.redAccent),
+              ...contestados.map((doc) => _buildCard(doc, primaryColor)),
+            ],
+
+            if (pendentesAcao.isNotEmpty) ...[
+              _buildHeader(Icons.priority_high_rounded, "FINALIZAR E PAGAR", Colors.orangeAccent),
+              ...pendentesAcao.map((doc) => _buildCard(doc, primaryColor)),
+            ],
+
+            if (emAndamento.isNotEmpty) ...[
+              _buildHeader(Icons.sports_soccer, "EM ANDAMENTO", const Color(0xFF00E676)),
+              ...emAndamento.map((doc) => _buildCard(doc, primaryColor)),
+            ],
+
+            if (proximos.isNotEmpty) ...[
+              _buildHeader(Icons.calendar_today_rounded, "PRÓXIMAS PARTIDAS", Colors.blueAccent),
+              ...proximos.map((doc) => _buildCard(doc, primaryColor)),
+            ],
+            
+            const SizedBox(height: 50),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- 📚 ABA 2: HISTÓRICO (O que já passou, expirou ou cancelou) ---
+  Widget _buildAbaHistorico() {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('jogos')
+          .where('idContratante', isEqualTo: uid)
+          .orderBy('dataHora', descending: true) // 🟢 Histórico desce do mais recente pro mais antigo!
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const Center(child: Text("Erro ao carregar jogos", style: TextStyle(color: Colors.white)));
+        if (!snapshot.hasData) return Center(child: CircularProgressIndicator(color: primaryColor));
+
+        final agora = DateTime.now();
+        final documentos = snapshot.data!.docs;
+
+        final historico = documentos.where((doc) {
+          final status = doc['status'];
+          final dt = (doc['dataHora'] as Timestamp).toDate();
+
+          // Já finalizados ou cancelados oficialmente vêm pra cá
+          if (['finalizado', 'cancelado'].contains(status)) return true;
+          
+          // 🟢 CORREÇÃO DO BURACO NEGRO: Se está aberto mas o horário do jogo já passou, ele expirou! Vem pro histórico.
+          if (status == 'aberto' && agora.isAfter(dt)) return true;
+
+          return false;
+        }).toList();
+
+        if (historico.isEmpty) return _buildEmptyState();
+
+        return ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          children: [
+            const SizedBox(height: 10),
+            _buildHeader(Icons.history_rounded, "HISTÓRICO DE JOGOS", Colors.white54),
+            ...historico.map((doc) {
+              // Hack Visual: Se caiu no buraco negro, passamos o status como cancelado pro Card entender visualmente!
+              Map<String, dynamic> dadosFormatados = Map.from(doc.data() as Map<String, dynamic>);
+              dadosFormatados['id'] = doc.id;
+              
+              final dt = (dadosFormatados['dataHora'] as Timestamp).toDate();
+              if (dadosFormatados['status'] == 'aberto' && agora.isAfter(dt)) {
+                 dadosFormatados['status'] = 'expirado';
+                 dadosFormatados['motivoCancelamento'] = 'O horário passou e nenhum goleiro aceitou.';
+              }
+
+              return CardJogoContratante(jogo: dadosFormatados, cor: primaryColor);
+            }),
+            const SizedBox(height: 50),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- 🧱 COMPONENTES VISUAIS ---
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -141,7 +216,7 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
 
   Widget _buildHeader(IconData icon, String label, Color cor) {
     return Padding(
-      padding: const EdgeInsets.only(top: 25, bottom: 12),
+      padding: const EdgeInsets.only(top: 15, bottom: 12),
       child: Row(
         children: [
           Icon(icon, color: cor, size: 14),

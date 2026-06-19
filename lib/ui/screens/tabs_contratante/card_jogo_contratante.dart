@@ -20,7 +20,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
   Timer? _timer;
   Duration _diferencaServidor = Duration.zero;
 
-@override
+  @override
   void initState() {
     super.initState();
     PushNotificationService().inicializar();
@@ -63,7 +63,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     );
   }
 
-    Future<void> _mostrarModalAvaliacao(String idGoleiro) async {
+  Future<void> _mostrarModalAvaliacao(String idGoleiro) async {
     int estrelas = 5;
     bool enviando = false;
 
@@ -204,7 +204,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                 backgroundColor: Colors.redAccent,
                 disabledBackgroundColor: Colors.white10
               ),
-              child: const Text("ENVIAR CONTESTAÇÃO"),
+              child: const Text("ENVIAR CONTESTAÇÃO", style: TextStyle(color: Colors.white)),
             )
           ],
         ),
@@ -241,9 +241,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
       await batch.commit();
       _showSnackBar("Contestação registrada. Nossa equipe analisará o caso.", cor: Colors.orange);
       
-      if (widget.jogo['idGoleiro'] != null) {
-        await _mostrarModalAvaliacao(widget.jogo['idGoleiro']);
-      }
     } catch (e) {
       _showSnackBar("Erro ao processar contestação.");
     } finally { 
@@ -326,6 +323,8 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
       });
 
       _showSnackBar("Pagamento liberado! O goleiro já recebeu.", cor: Colors.green);
+      
+      // Só dispara avaliação se o pagamento foi liberado com sucesso
       await _mostrarModalAvaliacao(idGoleiro);
 
     } catch (e) {
@@ -335,7 +334,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     }
   }
 
-  // 🟢 AQUI ESTÁ A CORREÇÃO DO EXTRATO NO CANCELAMENTO
   Future<void> _cancelarPartida() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
@@ -422,12 +420,11 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
           "qtdDesistencias": FieldValue.increment(1)
         });
 
-        // ✨ CORREÇÃO 1: Salvando o reembolso direto no extrato do usuário!
         DocumentReference extratoReembolso = userRef.collection('extrato').doc();
         transaction.set(extratoReembolso, {
           "id": extratoReembolso.id,
           "idUsuario": uid,
-          "tipo": "estorno", // A aba financeira lê 'estorno' como verde (+)
+          "tipo": "estorno",
           "valor": valorEstorno,
           "status": "concluido", 
           "descricao": multa > 0 ? "Reembolso Parcial (${widget.jogo['local']})" : "Reembolso Integral (${widget.jogo['local']})",
@@ -435,16 +432,16 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
           "idJogo": widget.jogo['id'],
         });
 
-        // ✨ CORREÇÃO 2: Salvando a multa no extrato!
         if (multa > 0) {
           DocumentReference extratoMulta = userRef.collection('extrato').doc();
           transaction.set(extratoMulta, {
             "id": extratoMulta.id,
             "idUsuario": uid,
-            "tipo": "multa_cancelamento", // A aba financeira lê isso como vermelho/laranja (-)
+            "tipo": "multa_cancelamento",
             "status": "concluido",
             "valor": multa,
-            "descricao": "Taxa de cancelamento (< ${horasRegraMulta}h)",
+            // 🟢 MUDANÇA AQUI: Adicionado o nome do local na quebra de linha!
+            "descricao": "Taxa de cancelamento (< ${horasRegraMulta}h)\n${widget.jogo['local']}",
             "data": FieldValue.serverTimestamp(),
             "idJogo": widget.jogo['id'],
           });
@@ -542,48 +539,50 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
       context: context,
       backgroundColor: const Color(0xFF1E1E1E),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 10),
-          Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10))),
-          const SizedBox(height: 15),
-          
-          if (!jaIniciou)
-            ListTile(
-              leading: const Icon(Icons.edit, color: Colors.blue),
-              title: const Text("Editar Detalhes", style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (context) => TelaCriarJogo(dados: widget.jogo), 
-                  fullscreenDialog: true
-                ));
-              },
-            ),
-
-          if (!jaTerminou)
-            ListTile(
-              leading: const Icon(Icons.cancel, color: Colors.redAccent),
-              title: const Text("Cancelar Partida", style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _cancelarPartida();
-              },
-            ),
-          
-          if (jaTerminou)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-              child: Text(
-                "Esta partida já foi encerrada. Utilize as ações no card principal.",
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white54, fontSize: 13),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10))),
+            const SizedBox(height: 15),
+            
+            if (!jaIniciou)
+              ListTile(
+                leading: const Icon(Icons.edit, color: Colors.blue),
+                title: const Text("Editar Detalhes", style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(
+                    builder: (context) => TelaCriarJogo(dados: widget.jogo), 
+                    fullscreenDialog: true
+                  ));
+                },
               ),
-            ),
 
-          const SizedBox(height: 30),
-        ],
+            if (!jaTerminou)
+              ListTile(
+                leading: const Icon(Icons.cancel, color: Colors.redAccent),
+                title: const Text("Cancelar Partida", style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _cancelarPartida();
+                },
+              ),
+            
+            if (jaTerminou)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+                child: Text(
+                  "Esta partida já foi encerrada. Utilize as ações no card principal.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white54, fontSize: 13),
+                ),
+              ),
+
+            const SizedBox(height: 10),
+          ],
+        ),
       ),
     );
   }
@@ -605,7 +604,9 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     final restante = limitePagamento.difference(agora);
     final bool expirouPrazo = restante.isNegative;
 
-    final bool precisaAvaliar = status == 'finalizado' && widget.jogo['avaliacaoGoleiro'] == null && widget.jogo['idGoleiro'] != null;
+    final int? notaGoleiro = widget.jogo['avaliacaoGoleiro'];
+    final bool precisaAvaliar = status == 'finalizado' && notaGoleiro == null && widget.jogo['idGoleiro'] != null;
+    final bool jaAvaliou = status == 'finalizado' && notaGoleiro != null;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -661,6 +662,26 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                 ),
               ),
 
+              if ((status == 'cancelado' || status == 'expirado') && widget.jogo['motivoCancelamento'] != null)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                  color: Colors.redAccent.withAlpha(26),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.info_outline, color: Colors.redAccent, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          widget.jogo['motivoCancelamento'],
+                          style: const TextStyle(color: Colors.redAccent, fontSize: 12, fontStyle: FontStyle.italic),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               if (jaTerminou && status == 'fechado' && !expirouPrazo)
                 Container(
                   width: double.infinity,
@@ -685,8 +706,8 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
                   color: Colors.blueGrey.withAlpha(26),
-                  child: Row(
-                    children: const [
+                  child: const Row(
+                    children: [
                       SizedBox(height: 14, width: 14, child: CircularProgressIndicator(color: Colors.blueGrey, strokeWidth: 2)),
                       SizedBox(width: 8),
                       Expanded(
@@ -712,11 +733,27 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                       icon: const Icon(Icons.star_rounded, color: Colors.amber, size: 18),
                       label: const Text("AVALIAR GOLEIRO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
                       style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: Colors.amber.withAlpha(100)),
+                        side: const BorderSide(color: Color(0x66FFC107)), 
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       ),
                       onPressed: () => _mostrarModalAvaliacao(widget.jogo['idGoleiro']),
                     ),
+                  ),
+                ),
+
+              if (jaAvaliou)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text("Sua avaliação: ", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold)),
+                      ...List.generate(5, (index) => Icon(
+                        index < notaGoleiro! ? Icons.star_rounded : Icons.star_border_rounded,
+                        color: Colors.amber,
+                        size: 18,
+                      )),
+                    ],
                   ),
                 ),
               
@@ -759,6 +796,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
         case 'fechado': color = const Color(0xFF00E676); label = "CONFIRMADO"; break; 
         case 'finalizado': color = Colors.blueAccent; label = "PAGO"; break;
         case 'cancelado': color = Colors.white24; label = "CANCELADO"; break;
+        case 'expirado': color = Colors.deepPurpleAccent; label = "SEM GOLEIRO"; break; 
       }
     }
 

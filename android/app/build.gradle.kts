@@ -1,9 +1,19 @@
+import java.util.Properties // 🟢 O SEGREDO ESTAVA AQUI! Precisamos importar primeiro.
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
+}
+
+val localProperties = Properties() // 🟢 Agora chamamos só Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { stream ->
+        localProperties.load(stream)
+    }
 }
 
 android {
@@ -29,6 +39,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders += mapOf("googleMapsApiKey" to (localProperties.getProperty("google.maps.key") ?: ""))
     }
 
     buildTypes {

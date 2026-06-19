@@ -153,11 +153,11 @@ class AbaFinanceiroContratante extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         gradient: LinearGradient(
-          colors: [primary.withAlpha(51), Colors.white.withAlpha(13)], // Antigo: 0.2 e 0.05
+          colors: [primary.withAlpha(51), Colors.white.withAlpha(13)], 
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        border: Border.all(color: Colors.white.withAlpha(26)), // Antigo: 0.1
+        border: Border.all(color: Colors.white.withAlpha(26)), 
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -165,8 +165,8 @@ class AbaFinanceiroContratante extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("SALDO TOTAL", style: TextStyle(color: primary.withAlpha(204), fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2)), // Antigo: 0.8
-              Icon(Icons.account_balance_wallet_outlined, color: primary.withAlpha(128)), // Antigo: 0.5
+              Text("SALDO TOTAL", style: TextStyle(color: primary.withAlpha(204), fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2)), 
+              Icon(Icons.account_balance_wallet_outlined, color: primary.withAlpha(128)), 
             ],
           ),
           const SizedBox(height: 12),
@@ -217,16 +217,13 @@ class AbaFinanceiroContratante extends StatelessWidget {
       prefix = "-";
     }
 
-    final DateTime? dt = (data['data'] as Timestamp?)?.toDate();
-      String dataFormatada = "";
-      if (dt != null) {
-        final dia = dt.day.toString().padLeft(2, '0');
-        final mes = dt.month.toString().padLeft(2, '0');
-        final hora = dt.hour.toString().padLeft(2, '0');
-        final minuto = dt.minute.toString().padLeft(2, '0');
-        dataFormatada = "$dia/$mes às $hora:$minuto";
-    }
-
+    final DateTime dt = (data['data'] as Timestamp?)?.toDate() ?? DateTime.now();
+    final dia = dt.day.toString().padLeft(2, '0');
+    final mes = dt.month.toString().padLeft(2, '0');
+    final hora = dt.hour.toString().padLeft(2, '0');
+    final minuto = dt.minute.toString().padLeft(2, '0');
+    String dataFormatada = "$dia/$mes às $hora:$minuto";
+    
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -235,10 +232,11 @@ class AbaFinanceiroContratante extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start, // 🟢 Alinhamento pro topo para textos grandes não empurrarem o ícone
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: color.withAlpha(26), shape: BoxShape.circle), // Antigo: 0.1
+            decoration: BoxDecoration(color: color.withAlpha(26), shape: BoxShape.circle), 
             child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(width: 16),
@@ -246,15 +244,23 @@ class AbaFinanceiroContratante extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(data['descricao'] ?? "Transação", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                const SizedBox(height: 4),
+                // 🟢 maxLines removido para o texto poder crescer para a linha de baixo sem cortar
+                Text(
+                  data['descricao'] ?? "Transação", 
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14, height: 1.2),
+                ),
+                const SizedBox(height: 6),
                 Text(dataFormatada, style: const TextStyle(color: Colors.white24, fontSize: 11)),
               ],
             ),
           ),
-          Text(
-            "$prefix R\$ ${valor.toStringAsFixed(2)}",
-            style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16),
+          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.only(top: 2), // Alinha o valor com a primeira linha do título
+            child: Text(
+              "$prefix R\$ ${valor.toStringAsFixed(2)}",
+              style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16),
+            ),
           ),
         ],
       ),
@@ -271,20 +277,20 @@ class AbaFinanceiroContratante extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white.withAlpha(8), // Antigo: 0.03
+                color: Colors.white.withAlpha(8), 
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.history_toggle_off_rounded,
                 size: 60,
-                color: Colors.white.withAlpha(26), // Antigo: 0.1
+                color: Colors.white.withAlpha(26), 
               ),
             ),
             const SizedBox(height: 16),
             Text(
               "NENHUMA MOVIMENTAÇÃO",
               style: TextStyle(
-                color: Colors.white.withAlpha(51), // Antigo: 0.2
+                color: Colors.white.withAlpha(51), 
                 fontSize: 14,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 1.5,
@@ -294,7 +300,7 @@ class AbaFinanceiroContratante extends StatelessWidget {
             Text(
               "Suas entradas e saídas aparecerão aqui.",
               style: TextStyle(
-                color: Colors.white.withAlpha(26), // Antigo: 0.1
+                color: Colors.white.withAlpha(26), 
                 fontSize: 12,
               ),
             ),

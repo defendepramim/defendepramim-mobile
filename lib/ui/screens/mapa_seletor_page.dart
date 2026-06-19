@@ -6,6 +6,9 @@ import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:defendepramim/core/chaves.dart'; // 🟢 Ajuste o caminho se precisar
+import 'dart:ui' as ui;
+import 'package:flutter/services.dart';
 
 class MapaSeletorPage extends StatefulWidget {
   const MapaSeletorPage({super.key});
@@ -20,33 +23,32 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
   LatLng _posicaoAtual = const LatLng(-30.0346, -51.2177); 
   String _ruaEletro = "Buscando endereço...";
   bool _carregandoLocalizacao = true;
-  Set<Marker> _pinosQuadras = {}; // 🔥 Guarda os pinos das quadras do Firebase
-  BitmapDescriptor? _iconeQuadraParceira; // 🔥 Vai guardar a imagem customizada
+  Set<Marker> _pinosQuadras = {}; 
+  BitmapDescriptor? _iconeQuadraParceira; // 🟢 Armazena o ícone customizado convertido
 
-  // Controles dos novos campos separados
+  // 🟢 TRAVA DE PROTEÇÃO DO GOOGLE PLACES
+  bool _veioDaBusca = false;
+
   final TextEditingController _cNomeQuadra = TextEditingController();
   final TextEditingController _cObsQuadra = TextEditingController();
   final TextEditingController _cBusca = TextEditingController();
 
-  // Controle de economia do Google (Session Token)
   String _sessionToken = const Uuid().v4();
   List<dynamic> _previsoesBusca = [];
 
-  // Chave do Google (O código vai puxar direto do manifesto, mas se der erro, coloque sua string aqui)
-  final String _googleApiKey = "AIzaSyCE_x3Zho8A4vcGGXmvCHV0DWCtlDZhYtA"; 
+  // 🟢 Puxa direto do código compilado:
+  final String _googleApiKey = ChavesSecretas.googleApiKey;
 
   final String _mapStyle = '''[{"elementType": "geometry", "stylers": [{"color": "#212121"}]},{"elementType": "labels.icon", "stylers": [{"visibility": "off"}]},{"featureType": "road", "elementType": "geometry.fill", "stylers": [{"color": "#2c2c2c"}]},{"featureType": "water", "elementType": "geometry", "stylers": [{"color": "#000000"}]}]''';
 
-@override
-void initState() {
-  super.initState();
-  _pegarLocalizacaoAtual();
-  
-  // Garante que o Flutter já está pronto para desenhar imagens antes de carregar o ícone
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    _criarIconeCustomizado();
-  });
-}
+  @override
+  void initState() {
+    super.initState();
+    _pegarLocalizacaoAtual();
+    
+    // 🟢 Dispara o carregamento do ícone logo na inicialização
+    _inicializarIconeEQuadras();
+  }
 
   @override
   void dispose() {
@@ -56,88 +58,98 @@ void initState() {
     super.dispose();
   }
 
-Future<void> _criarIconeCustomizado() async {
-  // Ajusta o tamanho ideal para o pino não ficar gigante na tela (ex: 100 de largura)
-  final ImageConfiguration config = createLocalImageConfiguration(context, size: const Size(100, 100));
-  
-  final icone = await BitmapDescriptor.fromAssetImage(
-    config, 
-    'assets/images/bola_pino.png' // ⚽ Caminho da sua imagem!
-  );
-  
-  setState(() {
-    _iconeQuadraParceira = icone;
-  });
-  
-  // Depois que o ícone carregar na memória, aí sim buscamos os pinos do Firebase!
-  _carregarQuadrasParceiras(); 
-}
-
-  Future<void> _carregarQuadrasParceiras() async {
-  try {
-    // Busca todas as quadras ativas no seu Firestore
-    final snapshot = await FirebaseFirestore.instance.collection('quadras').get();
-    
-    Set<Marker> novosPinos = {};
-
-    for (var doc in snapshot.docs) {
-      final dados = doc.data();
-      final double? lat = dados['latitude']?.toDouble();
-      final double? lng = dados['longitude']?.toDouble();
-      final String nome = dados['nome'] ?? 'Quadra Parceira';
-      final String endereco = dados['endereco'] ?? '';
-
-      // Se a quadra tiver coordenadas válidas, cria o pino dela
-      if (lat != null && lng != null) {
-        novosPinos.add(
-          Marker(
-            markerId: MarkerId(doc.id),
-            position: LatLng(lat, lng),
-            icon: _iconeQuadraParceira ?? BitmapDescriptor.defaultMarkerWithHue(145.0),
-            // 🟢 Dentro de _carregarQuadrasParceiras(), procure o InfoWindow:
-infoWindow: InfoWindow(
-  title: nome,
-  snippet: "Toque para selecionar esta quadra",
-  onTap: () {
-    Navigator.pop(context, {
-      'nomeLocal': nome,         // 👈 Garante que envia o NOME real da quadra (Ex: Arena Soccer)
-      'enderecoRua': endereco,   // 👈 Garante que envia a RUA/ENDEREÇO separado
-      'obs': dados['observacoes'] ?? '',
-      'lat': lat,
-      'lng': lng,
-    });
-  },
-),
-          ),
-        );
+  // 🟢 FUNÇÃO COMBINADA: Garante que o ícone carregue antes de buscar os dados do Firebase
+  // 🟢 FUNÇÃO COMBINADA: Garante que o ícone carregue antes de buscar os dados do Firebase
+  Future<void> _inicializarIconeEQuadras() async {
+    try {
+      // Abre o arquivo de imagem bruto
+      ByteData data = await rootBundle.load('assets/bola_pino.png');
+      
+      // 🔴 REDUZIDO AQUI: Mudamos de 120 para 55 para ficar bem ajustado e nítido no mapa!
+      ui.Codec codec = await ui.instantiateImageCodec(data.buffer.asUint8List(), targetWidth: 55);
+      
+      ui.FrameInfo fi = await codec.getNextFrame();
+      final bytes = await fi.image.toByteData(format: ui.ImageByteFormat.png);
+      
+      if (bytes != null) {
+        setState(() {
+          _iconeQuadraParceira = BitmapDescriptor.bytes(bytes.buffer.asUint8List());
+        });
+        debugPrint("⚽ ÍCONE CUSTOMIZADO COMPACTADO COM SUCESSO!");
       }
+    } catch (e) {
+      debugPrint("🚨 Erro ao converter imagem do asset: $e");
     }
 
-    setState(() {
-      _pinosQuadras = novosPinos;
-    });
-
-  } catch (e) {
-    debugPrint("Erro ao carregar quadras parceiras: $e");
+    // Mesmo se a imagem falhar, busca as quadras para usar o pino verde como plano B
+    _carregarQuadrasParceiras();
   }
-}
 
-Future<void> _buscarEnderecoTexto(String texto) async {
+  Future<void> _carregarQuadrasParceiras() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('quadras')
+          .where('aprovada', isEqualTo: true)
+          .get();
+          
+      Set<Marker> novosPinos = {};
+
+      for (var doc in snapshot.docs) {
+        final dados = doc.data();
+        
+        final double? lat = dados['latitude']?.toDouble();
+        final double? lng = dados['longitude']?.toDouble();
+        final String nome = dados['nome'] ?? 'Quadra Parceira';
+        final String endereco = dados['endereco'] ?? '';
+
+        if (lat != null && lng != null) {
+          novosPinos.add(
+            Marker(
+              markerId: MarkerId(doc.id),
+              position: LatLng(lat, lng),
+              
+              // 🟢 SE O ÍCONE CUSTOMIZADO ESTIVER PRONTO, ELE USA. SE NÃO, ATIVA O VERDE NATIVO.
+              icon: _iconeQuadraParceira ?? BitmapDescriptor.defaultMarkerWithHue(145.0),
+              
+              infoWindow: InfoWindow(
+                title: nome,
+                snippet: "Toque para selecionar esta quadra",
+                onTap: () {
+                  Navigator.pop(context, {
+                    'nomeLocal': nome,      
+                    'enderecoRua': endereco,  
+                    'obs': dados['observacoes'] ?? '',
+                    'lat': lat,
+                    'lng': lng,
+                  });
+                },
+              ),
+            ),
+          );
+        }
+      }
+
+      setState(() {
+        _pinosQuadras = novosPinos;
+      });
+
+    } catch (e) {
+      debugPrint("Erro ao carregar quadras parceiras: $e");
+    }
+  }
+
+  Future<void> _buscarEnderecoTexto(String texto) async {
     if (texto.isEmpty) {
       setState(() => _previsoesBusca = []);
       return;
     }
 
     final url = Uri.parse(
-      'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$texto&types=geocode|establishment&key=$_googleApiKey&sessiontoken=$_sessionToken&language=pt-BR'
+      'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$texto&types=geocode|establishment&components=country:br&key=$_googleApiKey&sessiontoken=$_sessionToken&language=pt-BR'
     );
 
     try {
       final response = await http.get(url);
-      
-      // 🔴 COLOQUE ESTA LINHA AQUI PARA VER O ERRO NO TERMINAL DO VSCODE/ANDROID STUDIO:
-      debugPrint("RETORNO GOOGLE PLACES: ${response.body}");
-
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         setState(() {
@@ -149,7 +161,6 @@ Future<void> _buscarEnderecoTexto(String texto) async {
     }
   }
 
-  // ✈️ MOVE O MAPA PARA O LUGAR CLICADO NA BUSCA
   Future<void> _irParaLugarUid(String placeId, String nomePrincipal) async {
     FocusScope.of(context).unfocus();
     setState(() {
@@ -157,7 +168,7 @@ Future<void> _buscarEnderecoTexto(String texto) async {
       _cBusca.clear();
     });
 
-    final url = Uri.parse('https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&fields=geometry,name&key=$_googleApiKey&sessiontoken=$_sessionToken');
+    final url = Uri.parse('https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&fields=geometry,name,formatted_address&key=$_googleApiKey&sessiontoken=$_sessionToken&language=pt-BR');
     
     try {
       final response = await http.get(url);
@@ -165,16 +176,19 @@ Future<void> _buscarEnderecoTexto(String texto) async {
         final data = json.decode(response.body);
         final loc = data['result']['geometry']['location'];
         final LatLng novaPos = LatLng(loc['lat'], loc['lng']);
+        
+        final String nomeLugar = data['result']['name'] ?? nomePrincipal;
+        final String enderecoCompleto = data['result']['formatted_address'] ?? "Endereço encontrado";
 
         setState(() {
           _posicaoAtual = novaPos;
-          // Se o usuário clicou num estabelecimento (ex: "Arena Soccer"), já preenche o nome!
-          _cNomeQuadra.text = nomePrincipal; 
-          _sessionToken = const Uuid().v4(); // Renova o token para a próxima busca
+          _cNomeQuadra.text = nomeLugar; 
+          _ruaEletro = enderecoCompleto; 
+          _veioDaBusca = true; 
+          _sessionToken = const Uuid().v4(); 
         });
 
         _mapController?.animateCamera(CameraUpdate.newLatLngZoom(novaPos, 16));
-        _atualizarEnderecoRua(novaPos);
       }
     } catch (e) {
       debugPrint("Erro ao pegar detalhes: $e");
@@ -195,13 +209,19 @@ Future<void> _buscarEnderecoTexto(String texto) async {
     setState(() {
       _posicaoAtual = LatLng(pos.latitude, pos.longitude);
       _carregandoLocalizacao = false;
+      _veioDaBusca = false; 
     });
 
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_posicaoAtual, 16));
     _atualizarEnderecoRua(_posicaoAtual);
   }
 
-Future<void> _atualizarEnderecoRua(LatLng pos) async {
+  Future<void> _atualizarEnderecoRua(LatLng pos) async {
+    if (_veioDaBusca) {
+      _veioDaBusca = false; 
+      return; 
+    }
+
     try {
       List<Placemark> locais = await placemarkFromCoordinates(pos.latitude, pos.longitude);
       if (locais.isNotEmpty) {
@@ -209,18 +229,14 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
         
         setState(() {
           String rua = lugar.thoroughfare ?? lugar.street ?? "Endereço desconhecido";
-          String numero = lugar.subThoroughfare ?? ""; // 🟢 AQUI ESTÁ A MÁGICA DO NÚMERO!
+          String numero = lugar.subThoroughfare ?? ""; 
           String bairro = lugar.subLocality ?? lugar.locality ?? "";
           
-          // Monta o endereço no padrão brasileiro
           String enderecoCompleto = rua;
           
-          // Se o Google achar o número, adiciona com vírgula
           if (numero.isNotEmpty && numero != "S/N") {
             enderecoCompleto += ", $numero";
           }
-          
-          // Adiciona o bairro com um tracinho
           if (bairro.isNotEmpty) {
             enderecoCompleto += " - $bairro";
           }
@@ -233,15 +249,15 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
     }
   }
 
-@override
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         alignment: Alignment.center,
         children: [
-          // 1. MAPA EM TELA CHEIA (Fica fora do SafeArea para o efeito de fundo infinito)
           GoogleMap(
+            style: _mapStyle,
             initialCameraPosition: CameraPosition(target: _posicaoAtual, zoom: 15),
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
@@ -250,28 +266,31 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
             markers: _pinosQuadras,
             onMapCreated: (controller) {
               _mapController = controller;
-              _mapController?.setMapStyle(_mapStyle);
             },
             onCameraIdle: () => _atualizarEnderecoRua(_posicaoAtual),
+            onCameraMoveStarted: () {
+              if (!_veioDaBusca) {
+                FocusScope.of(context).unfocus();
+              }
+            },
             onCameraMove: (pos) => _posicaoAtual = pos.target,
           ),
 
-          // 2. PINO FIXO NO MEIO (Fica fora do SafeArea para centralizar perfeitamente no mapa)
-          const Column(
+          Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.location_on, size: 50, color: Color(0xFF00E676)),
-              SizedBox(height: 50),
+              _carregandoLocalizacao 
+                  ? const SizedBox(height: 50, width: 50, child: CircularProgressIndicator(color: Color(0xFF00E676)))
+                  : const Icon(Icons.location_on, size: 50, color: Color(0xFF00E676)),
+              const SizedBox(height: 50),
             ],
           ),
 
-          // 🟢 ARMADURA: Protege APENAS os itens da interface
           SafeArea(
             child: Stack(
               children: [
-                // 3. 🔍 BARRA DE BUSCA COMPLETA (NO TOPO)
                 Positioned(
-                  top: 10, // Agora o top não precisa ser "50", o SafeArea já faz o distanciamento da câmera
+                  top: 10, 
                   left: 20,
                   right: 20,
                   child: Column(
@@ -299,7 +318,6 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                         ),
                       ),
                       
-                      // Lista suspensa de resultados da busca
                       if (_previsoesBusca.isNotEmpty)
                         Container(
                           margin: const EdgeInsets.only(top: 5),
@@ -324,9 +342,8 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                   ),
                 ),
 
-                // Botão GPS atual
                 Positioned(
-                  bottom: 290, // Subimos um pouquinho pra não colar no painel
+                  bottom: 290, 
                   right: 20,
                   child: FloatingActionButton(
                     backgroundColor: const Color(0xFF1E1E1E),
@@ -336,9 +353,8 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                   ),
                 ),
 
-                // 4. 🏢 NOVO PAINEL INFERIOR COM CAMPOS DA QUADRA E OBSERVAÇÕES
                 Positioned(
-                  bottom: 10, // Agora o bottom fica baixinho, pois o SafeArea protege contra a navegação
+                  bottom: 10, 
                   left: 20,
                   right: 20,
                   child: Container(
@@ -352,11 +368,9 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Exibe a rua atual onde o pino está em cima
                         Text(_ruaEletro, style: const TextStyle(color: Colors.white54, fontSize: 12)),
                         const SizedBox(height: 12),
 
-                        // Campo 1: Nome da Quadra (Obrigatório para o nosso Crowdsourcing!)
                         TextField(
                           controller: _cNomeQuadra,
                           style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
@@ -372,7 +386,6 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                         ),
                         const SizedBox(height: 8),
 
-                        // Campo 2: Observações específicas
                         TextField(
                           controller: _cObsQuadra,
                           style: const TextStyle(color: Colors.white, fontSize: 13),
@@ -388,7 +401,6 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                         ),
                         const SizedBox(height: 16),
 
-                        // Botão de Confirmação Final
                         SizedBox(
                           width: double.infinity,
                           height: 48,
@@ -398,7 +410,6 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                             onPressed: () {
-                              // Validação básica: Não deixa salvar sem dar um nome para o local
                               if (_cNomeQuadra.text.trim().isEmpty) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text("Dê um nome para a Quadra/Local!"), backgroundColor: Colors.orangeAccent)
@@ -406,7 +417,6 @@ Future<void> _atualizarEnderecoRua(LatLng pos) async {
                                 return;
                               }
 
-                              // Devolve tudo mastigadinho para a tela de criação
                               Navigator.pop(context, {
                                 'nomeLocal': _cNomeQuadra.text.trim(),
                                 'enderecoRua': _ruaEletro,

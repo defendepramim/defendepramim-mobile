@@ -16,171 +16,108 @@ class AbaCarteira extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: backgroundColor,
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(uid)
-            .collection('extrato')
-            .orderBy('data', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const Center(
-              child: Text(
-                "Erro ao carregar",
-                style: TextStyle(color: Colors.white),
-              ),
-            );
-          }
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: primaryColor),
-            );
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance.collection('usuarios').doc(uid).snapshots(),
+        builder: (context, userSnapshot) {
+          if (userSnapshot.hasError) return const Center(child: Text("Erro ao carregar perfil", style: TextStyle(color: Colors.white)));
+          if (userSnapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: primaryColor));
           }
 
-          final documentos = snapshot.data?.docs ?? [];
+          final userDados = userSnapshot.data?.data() as Map<String, dynamic>?;
+          
+          double saldoDisponivelParaSaque = double.tryParse(userDados?['saldo']?.toString() ?? '0') ?? 0.0;
+          double valorRetidoContestacao = double.tryParse(userDados?['valorRetido']?.toString() ?? '0') ?? 0.0;
+          double dividaExibicao = double.tryParse(userDados?['saldoDevedor']?.toString() ?? '0') ?? 0.0;
 
-          double entradasConcluidas = 0;
-          double saidasReais = 0;
-          double valorRetidoContestacao = 0;
-          double dividasDeMultas = 0;
+          return StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('usuarios')
+                .doc(uid)
+                .collection('extrato')
+                .orderBy('data', descending: true)
+                .snapshots(),
+            builder: (context, extratoSnapshot) {
+              final documentos = extratoSnapshot.data?.docs ?? [];
 
-          // --- LÓGICA DE CÁLCULO ---
-          for (var doc in documentos) {
-            final dados = doc.data() as Map<String, dynamic>;
-            final valor =
-                double.tryParse(dados['valor']?.toString() ?? '0') ?? 0.0;
-            final tipo = dados['tipo'];
-            final statusTransacao = dados['status'] ?? 'concluido';
-
-            if (statusTransacao == 'contestado') {
-              valorRetidoContestacao += valor;
-            } else {
-              if (tipo == 'recebimento' || tipo == 'entrada') {
-                entradasConcluidas += valor;
-              } else if (tipo == 'multa_desistencia') {
-                dividasDeMultas += valor;
-              } else if (tipo == 'saida') {
-                saidasReais += valor;
-              }
-            }
-          }
-
-          // Cálculo do saldo com abatimento de multas
-          double saldoBruto =
-              entradasConcluidas - saidasReais - dividasDeMultas;
-          double saldoDisponivelParaSaque = saldoBruto > 0 ? saldoBruto : 0;
-          double dividaExibicao = saldoBruto < 0 ? saldoBruto.abs() : 0;
-
-          return ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-            children: [
-              const Text(
-                "Minha Carteira",
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // 1. CARD PRINCIPAL
-              _cardSaldoGoleiro(
-                context,
-                uid, 
-                saldoDisponivelParaSaque, 
-                primaryColor, 
-              ),
-
-              const SizedBox(height: 12),
-
-              // 2. LINHA DE ALERTAS (RETIDO E DEVEDOR)
-              if (valorRetidoContestacao > 0 || dividaExibicao > 0)
-                Row(
-                  children: [
-                    if (valorRetidoContestacao > 0)
-                      Expanded(
-                        child: _cardStatusEspecial(
-                          "VALOR RETIDO",
-                          valorRetidoContestacao,
-                          Icons.lock_clock,
-                          Colors.orangeAccent,
-                        ),
-                      ),
-                    if (valorRetidoContestacao > 0 && dividaExibicao > 0)
-                      const SizedBox(width: 10),
-                    if (dividaExibicao > 0)
-                      Expanded(
-                        child: _cardStatusEspecial(
-                          "SALDO DEVEDOR",
-                          dividaExibicao,
-                          Icons.gavel_rounded,
-                          Colors.redAccent,
-                        ),
-                      ),
-                  ],
-                ),
-
-              const SizedBox(height: 35),
-              const Text(
-                "Histórico de Transações",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Divider(color: Colors.white10),
-
-              if (documentos.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(40),
-                  child: Text(
-                    "Nenhuma movimentação.",
-                    style: TextStyle(color: Colors.white24),
-                    textAlign: TextAlign.center,
+              return ListView(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                children: [
+                  const Text(
+                    "Minha Carteira",
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
-                ),
+                  const SizedBox(height: 20),
 
-              ...documentos.map((doc) {
-                final item = doc.data() as Map<String, dynamic>;
-                final tipo = item['tipo'] ?? '';
-                final data =
-                    (item['data'] as Timestamp?)?.toDate() ?? DateTime.now();
-                final valor = item['valor'] ?? 0;
-                final status = item['status'] ?? 'concluido';
+                  // 1. CARD PRINCIPAL
+                  _cardSaldoGoleiro(context, uid, saldoDisponivelParaSaque, primaryColor),
+                  const SizedBox(height: 12),
 
-                if (tipo == 'multa_desistencia') {
-                  return _buildItemMulta(
-                    item['descricao'] ?? 'Multa',
-                    data,
-                    valor,
-                  );
-                }
+                  // 2. LINHA DE ALERTAS (RETIDO E DEVEDOR)
+                  if (valorRetidoContestacao > 0 || dividaExibicao > 0)
+                    Row(
+                      children: [
+                        if (valorRetidoContestacao > 0)
+                          Expanded(
+                            child: _cardStatusEspecial("VALOR RETIDO", valorRetidoContestacao, Icons.lock_clock, Colors.orangeAccent),
+                          ),
+                        if (valorRetidoContestacao > 0 && dividaExibicao > 0)
+                          const SizedBox(width: 10),
+                        if (dividaExibicao > 0)
+                          Expanded(
+                            child: _cardStatusEspecial("SALDO DEVEDOR", dividaExibicao, Icons.gavel_rounded, Colors.redAccent),
+                          ),
+                      ],
+                    ),
 
-                // Identifica se é saída
-                bool isSaida = tipo == 'saida';
+                  const SizedBox(height: 35),
+                  const Text(
+                    "Histórico de Transações",
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const Divider(color: Color(0xFF1A1A1A)), 
 
-                return _buildItemHistoricoGoleiro(
-                  item['descricao'] ?? 'Transação',
-                  data,
-                  valor,
-                  status == 'contestado' 
-                      ? Colors.orangeAccent 
-                      : (isSaida ? Colors.redAccent : primaryColor),
-                  status,
-                  isSaida,
-                );
-              }).toList(),
-            ],
+                  if (documentos.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(40),
+                      child: Text(
+                        "Nenhuma movimentação.",
+                        style: TextStyle(color: Color(0xFF444444)), 
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+
+                  ...documentos.map((doc) {
+                    final item = doc.data() as Map<String, dynamic>;
+                    final tipo = item['tipo'] ?? '';
+                    final data = (item['data'] as Timestamp?)?.toDate() ?? DateTime.now();
+                    final valor = double.tryParse(item['valor']?.toString() ?? '0') ?? 0.0;
+                    final status = item['status'] ?? 'concluido';
+
+                    if (tipo == 'multa_desistencia') {
+                      return _buildItemMulta(item['descricao'] ?? 'Multa', data, valor);
+                    }
+
+                    return _buildItemHistoricoGoleiro(
+                      item['descricao'] ?? 'Transação',
+                      data,
+                      valor,
+                      status == 'contestado' ? Colors.orangeAccent : (tipo == 'saida' ? Colors.redAccent : primaryColor),
+                      status,
+                      tipo == 'saida',
+                      primaryColor,
+                    );
+                  }).toList(),
+                ],
+              );
+            },
           );
         },
       ),
     );
   }
 
-  // --- WIDGETS DE SUPORTE (FORA DO BUILD) ---
+  // --- WIDGETS DE SUPORTE 100% LIMPOS DE WITHOPACITY ---
 
   Widget _cardSaldoGoleiro(BuildContext context, String uid, double saldo, Color primary) {
     bool temSaldo = saldo > 0;
@@ -190,42 +127,29 @@ class AbaCarteira extends StatelessWidget {
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
-        gradient: LinearGradient(
-          colors: [primary.withOpacity(0.2), Colors.white.withOpacity(0.05)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
+        color: const Color(0xFF0D1F14), 
+        border: Border.all(color: const Color(0xFF1A3324)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          const Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 "SALDO DISPONÍVEL",
-                style: TextStyle(
-                  color: primary.withOpacity(0.8),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2,
-                ),
+                style: TextStyle(color: Color(0xFF00C853), fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.2),
               ),
               Icon(
                 Icons.account_balance_wallet_outlined,
-                color: primary.withOpacity(0.5),
+                color: Color(0xFF00C853), 
               ),
             ],
           ),
           const SizedBox(height: 12),
           Text(
             "R\$ ${saldo.toStringAsFixed(2)}",
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 36,
-              fontWeight: FontWeight.w900,
-            ),
+            style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 20),
           SizedBox(
@@ -233,25 +157,15 @@ class AbaCarteira extends StatelessWidget {
             height: 50,
             child: ElevatedButton.icon(
               onPressed: temSaldo ? () => _iniciarFluxoSaque(context, uid, saldo, primary) : null,
-              icon: Icon(
-                Icons.arrow_upward_rounded,
-                size: 20,
-                color: temSaldo ? Colors.black : Colors.white24,
-              ),
+              icon: Icon(Icons.arrow_upward_rounded, size: 20, color: temSaldo ? Colors.black : const Color(0xFF555555)),
               label: Text(
                 "SOLICITAR SAQUE",
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 13,
-                  color: temSaldo ? Colors.black : Colors.white24,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: temSaldo ? Colors.black : const Color(0xFF555555)),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: primary,
-                disabledBackgroundColor: Colors.white.withOpacity(0.05),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(15),
-                ),
+                disabledBackgroundColor: const Color(0xFF1E1E1E),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                 elevation: 0,
               ),
             ),
@@ -261,8 +175,6 @@ class AbaCarteira extends StatelessWidget {
     );
   }
 
-  // --- LÓGICA DE SAQUE BLINDADA ---
-  
   Future<void> _iniciarFluxoSaque(BuildContext context, String uid, double saldoDisponivel, Color primary) async {
     showDialog(
       context: context,
@@ -272,10 +184,10 @@ class AbaCarteira extends StatelessWidget {
 
     try {
       final snap = await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
-      final dados = snap.data() as Map<String, dynamic>?;
+      final dados = snap.data();
 
       if (!context.mounted) return;
-      Navigator.pop(context); // Fecha o loading
+      Navigator.pop(context);
 
       final chavePix = dados?['chavePix'];
       final tipoPix = dados?['tipoPix'];
@@ -287,7 +199,6 @@ class AbaCarteira extends StatelessWidget {
       }
 
       _abrirModalDigitacaoSaque(context, uid, nomeGoleiro, chavePix.toString(), tipoPix.toString(), saldoDisponivel, primary);
-
     } catch (e) {
       if (!context.mounted) return;
       Navigator.pop(context); 
@@ -297,6 +208,7 @@ class AbaCarteira extends StatelessWidget {
     }
   }
 
+  // 🟢 AQUI ESTÁ A FUNÇÃO DA TRANSAÇÃO INTEIRA DE VOLTA!
   void _abrirModalDigitacaoSaque(
     BuildContext context,
     String uid,
@@ -315,16 +227,26 @@ class AbaCarteira extends StatelessWidget {
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setStateSB) {
+          // 🟢 1. Pega a altura exata da barra do Android do celular do usuário
+          final bottomPadding = MediaQuery.of(ctx).padding.bottom;
+
           return Padding(
             padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
             child: Container(
-              padding: const EdgeInsets.all(24),
+              // 🟢 2. Removemos o const EdgeInsets.all(24) e colocamos esse:
+              padding: EdgeInsets.only(
+                top: 24,
+                left: 24,
+                right: 24,
+                bottom: 24 + bottomPadding, // 🟢 Empurra o conteúdo para cima da barra!
+              ),
               decoration: const BoxDecoration(
                 color: Color(0xFF1E1E1E),
                 borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                // ... (o resto da coluna continua igual)
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
@@ -354,7 +276,7 @@ class AbaCarteira extends StatelessWidget {
                       prefixText: "R\$ ",
                       prefixStyle: const TextStyle(color: Colors.white54, fontSize: 24),
                       filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
+                      fillColor: const Color(0xFF1A1A1A),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                       suffixIcon: TextButton(
                         onPressed: () {
@@ -492,13 +414,13 @@ class AbaCarteira extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("DEPOIS", style: TextStyle(color: Colors.white54)),
+            child: const Text("DEPOIS", style: TextStyle(color: Color(0xFF666666))),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: primary),
             onPressed: () {
               Navigator.pop(ctx);
-              ModalCadastroPix.show(context);
+              ModalCadastroPix.show(context); 
             },
             child: const Text("CADASTRAR PIX", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           ),
@@ -508,12 +430,14 @@ class AbaCarteira extends StatelessWidget {
   }
 
   Widget _cardStatusEspecial(String titulo, double valor, IconData icone, Color cor) {
+    final Color corBorda = cor == Colors.orangeAccent ? const Color(0xFF4D3300) : const Color(0xFF4D1A1A);
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: cor.withOpacity(0.05),
+        color: const Color(0xFF1E1E1E), 
         borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: cor.withOpacity(0.2)),
+        border: Border.all(color: corBorda),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -522,31 +446,24 @@ class AbaCarteira extends StatelessWidget {
             children: [
               Icon(icone, color: cor, size: 14),
               const SizedBox(width: 5),
-              Text(
-                titulo,
-                style: TextStyle(color: cor, fontSize: 9, fontWeight: FontWeight.bold),
-              ),
+              Text(titulo, style: TextStyle(color: cor, fontSize: 9, fontWeight: FontWeight.bold)),
             ],
           ),
           const SizedBox(height: 5),
-          Text(
-            "R\$ ${valor.toStringAsFixed(2)}",
-            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-          ),
+          Text("R\$ ${valor.toStringAsFixed(2)}", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         ],
       ),
     );
   }
 
-Widget _buildItemHistoricoGoleiro(String local, DateTime data, dynamic valor, Color cor, String status, bool isSaida) {
+  Widget _buildItemHistoricoGoleiro(String local, DateTime data, double valor, Color cor, String status, bool isSaida, Color primaryColor) {
     bool isContestado = status == 'contestado';
     bool isPendente = status == 'pendente';
-    
     IconData iconeLista = isContestado ? Icons.lock_outline : (isSaida ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded);
     String sinalOperacao = isSaida ? "- R\$" : "+ R\$";
     
     String textoBadge = "CONCLUÍDO";
-    Color corBadge = const Color(0xFF00E676); 
+    Color corBadge = primaryColor; 
     
     if (isContestado) {
       textoBadge = "BLOQUEADO";
@@ -559,22 +476,21 @@ Widget _buildItemHistoricoGoleiro(String local, DateTime data, dynamic valor, Co
       corBadge = Colors.redAccent;
     }
 
-    // ✨ A MÁGICA DO HORÁRIO ENTRA AQUI (Zero custo de banco de dados)
     String dataFormatada = "${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')} às ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}";
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
+        color: const Color(0xFF0D0D0D), 
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: const Color(0xFF1A1A1A)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: cor.withOpacity(0.1), shape: BoxShape.circle),
+            decoration: const BoxDecoration(color: Color(0xFF1E1E1E), shape: BoxShape.circle),
             child: Icon(iconeLista, color: cor, size: 20),
           ),
           const SizedBox(width: 14),
@@ -582,63 +498,51 @@ Widget _buildItemHistoricoGoleiro(String local, DateTime data, dynamic valor, Co
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  local,
-                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(local, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 8),
                 Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: corBadge.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: corBadge.withOpacity(0.2)),
-                      ),
-                      child: Text(
-                        textoBadge,
-                        style: TextStyle(color: corBadge, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5),
-                      ),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    // 🟢 REMOVIDO O 'const' DAQUI DEBAIXO:
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1A1A), 
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    const SizedBox(width: 8),
-                    // Agora a data vem com o horário bonitinho
-                    Text(
-                      dataFormatada,
-                      style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w500),
+                    child: Text(
+                      textoBadge, 
+                      style: TextStyle(color: corBadge, fontSize: 9, fontWeight: FontWeight.w900),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(dataFormatada, style: const TextStyle(color: Color(0xFF666666), fontSize: 11)),
+                ],
+              ),
               ],
             ),
           ),
-          Text(
-            "$sinalOperacao ${double.parse(valor.toString()).toStringAsFixed(2)}",
-            style: TextStyle(color: cor, fontWeight: FontWeight.w900, fontSize: 16),
-          ),
+          Text("$sinalOperacao ${valor.toStringAsFixed(2)}", style: TextStyle(color: cor, fontWeight: FontWeight.w900, fontSize: 16)),
         ],
       ),
     );
   }
 
-  Widget _buildItemMulta(String desc, DateTime data, dynamic valor) {
-    // ✨ HORÁRIO NA MULTA TAMBÉM
+  Widget _buildItemMulta(String desc, DateTime data, double valor) {
     String dataFormatada = "${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')} às ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}";
     
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.redAccent.withOpacity(0.03),
+        color: const Color(0xFF1A0A0A),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.1)),
+        border: Border.all(color: const Color(0xFF331111)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: Colors.redAccent.withOpacity(0.1), shape: BoxShape.circle),
+            decoration: const BoxDecoration(color: Color(0xFF2A1111), shape: BoxShape.circle),
             child: const Icon(Icons.remove, color: Colors.redAccent, size: 20),
           ),
           const SizedBox(width: 14),
@@ -646,43 +550,32 @@ Widget _buildItemHistoricoGoleiro(String local, DateTime data, dynamic valor, Co
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  desc,
-                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(desc, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      // 🟢 REMOVIDO O 'const' DAQUI TAMBÉM:
                       decoration: BoxDecoration(
-                        color: Colors.redAccent.withOpacity(0.1),
+                        color: const Color(0xFF2A1111), 
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
                       ),
                       child: const Text(
-                        "MULTA",
-                        style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                        "MULTA", 
+                        style: TextStyle(color: Colors.redAccent, fontSize: 9, fontWeight: FontWeight.w900),
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      dataFormatada,
-                      style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w500),
-                    ),
+                    Text(dataFormatada, style: const TextStyle(color: Color(0xFF666666), fontSize: 11)),
                   ],
                 ),
               ],
             ),
           ),
-          Text(
-            "- R\$ ${double.parse(valor.toString()).toStringAsFixed(2)}",
-            style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w900, fontSize: 16),
-          ),
+          Text("- R\$ ${valor.toStringAsFixed(2)}", style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w900, fontSize: 16)),
         ],
       ),
     );
   }
-  
 }
