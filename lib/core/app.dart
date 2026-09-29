@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+// 🟢 1. IMPORT DO PACOTE DE IDIOMAS AQUI:
+import 'package:flutter_localizations/flutter_localizations.dart'; 
+
 import '../ui/screens/auth_check.dart';
 import '../ui/screens/login_screen.dart';
 import '../ui/screens/initial_screen.dart';
 import '../ui/screens/cadastro_screen.dart';
-// Note que não precisamos importar as homes individuais aqui, 
-// pois o AuthCheck já faz isso lá dentro dele!
+import '../services/push_notification_service.dart';
 
 class DefendePraMimApp extends StatelessWidget {
   const DefendePraMimApp({super.key});
@@ -12,9 +14,20 @@ class DefendePraMimApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: PushNotificationService.navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'DefendePraMim',
       
+      // 🟢 2. CONFIGURAÇÕES DE TRADUÇÃO DO CALENDÁRIO/SISTEMA AQUI:
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('pt', 'BR'), // Força o Português do Brasil!
+      ],
+
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF121212),
@@ -35,16 +48,11 @@ class DefendePraMimApp extends StatelessWidget {
         ),
       ),
 
-      // 🚩 O AuthCheck decide qual tela mostrar primeiro
-      home: const AuthCheck(), 
-
-      // 🚩 MAPA DE ROTAS
       routes: {
+        '/': (context) => const AuthCheck(), 
         '/inicio': (context) => const InitialScreen(),
         '/login': (context) => const LoginScreen(),
         '/cadastro': (context) => const TelaCadastro(),
-        
-        // 🚀 A GRANDE MUDANÇA: A rota /home agora aponta para o Cérebro do App!
         '/home': (context) => const AuthCheck(), 
       },
     ); 

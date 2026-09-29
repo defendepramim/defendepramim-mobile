@@ -132,13 +132,53 @@ Future<void> _entrarComGoogle() async {
                   // O Expanded + SingleChildScrollView garante que o texto possa ser gigante no futuro e tenha scroll
                   const Expanded(
                     child: SingleChildScrollView(
-                      physics: BouncingScrollPhysics(),
+                      physics: BouncingScrollPhysics(), // <-- Sem const aqui
                       child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
+                        padding: EdgeInsets.symmetric(vertical: 16), // <-- Sem const aqui
                         child: Text(
-                          "🚧 EM CONSTRUÇÃO 🚧\n\nEstamos finalizando nossas diretrizes legais de privacidade e segurança financeira. Nosso compromisso é blindar os dados e transações de todos os goleiros e contratantes da plataforma.\n\n(No futuro, os termos reais entrarão aqui e o usuário poderá rolar o texto tranquilamente até o final para então clicar no botão abaixo.)",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
+'''TERMOS E CONDIÇÕES DE USO E POLÍTICA DE PRIVACIDADE
+Aplicativo Defende Pra Mim
+
+Bem-vindo(a) ao Defende Pra Mim. Ao criar uma conta e utilizar nosso aplicativo, você concorda expressamente com as regras abaixo. Leia com atenção, pois este documento é um contrato legal entre você (Usuário) e a plataforma.
+
+1. NATUREZA DO SERVIÇO (SOMOS APENAS UM APLICATIVO)
+O Defende Pra Mim é exclusivamente uma plataforma de tecnologia (Marketplace) que facilita a conexão entre organizadores de partidas de futebol ("Contratantes") e goleiros amadores/profissionais ("Goleiros"). Nós não organizamos os jogos, não somos donos das quadras e não prestamos serviços esportivos.
+
+2. INEXISTÊNCIA DE VÍNCULO EMPREGATÍCIO
+Fica expressamente declarado e reconhecido que não existe qualquer vínculo empregatício, de subordinação, exclusividade, sociedade ou relação de trabalho entre o Defende Pra Mim e os Goleiros cadastrados.
+• O Goleiro atua de forma autônoma, escolhendo livremente quais convocações aceitar.
+• A plataforma atua apenas como agente facilitador.
+
+3. ISENÇÃO DE RESPONSABILIDADE CIVIL E FÍSICA
+A prática esportiva envolve riscos inerentes. Ao utilizar a plataforma, o Usuário assume integralmente os riscos de sua participação nas partidas.
+• O Defende Pra Mim não se responsabiliza por lesões físicas, acidentes, danos materiais, danos morais, desentendimentos, furtos ou qualquer incidente ocorrido nas quadras.
+• A plataforma não fornece seguro de saúde ou seguro de vida aos usuários.
+
+4. POLÍTICA DE CANCELAMENTOS, FALTAS E MULTAS
+Para garantir a confiabilidade da plataforma para todos, aplicamos regras financeiras estritas:
+• Cancelamento Tardio ou No-Show (Falta): O Usuário que cancelar uma partida fora do prazo de carência estabelecido, ou que não comparecer ao jogo, estará sujeito a uma multa automática.
+• Transparência de Valores: O valor exato da multa e o tempo limite de antecedência para cancelamento gratuito são dinâmicos. Eles estarão sempre informados de forma clara na tela de confirmação antes de o Usuário aceitar o convite para a partida.
+• Autorização de Desconto: O Usuário autoriza expressamente que a plataforma retenha ou desconte o valor de multas pendentes de seus saldos futuros.
+
+5. PAGAMENTOS E TAXAS DE INTERMEDIAÇÃO
+• A plataforma cobra uma taxa de intermediação sobre as partidas finalizadas com sucesso, cujo valor é descontado automaticamente antes do repasse ao Goleiro.
+• A plataforma reserva-se o direito de reter temporariamente fundos em caso de suspeita de fraude, contestações ou descumprimento destes Termos.
+
+6. POLÍTICA DE PRIVACIDADE E LGPD
+Coletamos apenas os dados estritamente necessários para o funcionamento do app:
+• Dados Cadastrais e Financeiros: Nome, CPF, Telefone, E-mail e Chave PIX são armazenados em ambiente seguro e utilizados exclusivamente para emissão de notas e pagamentos.
+• Geolocalização (GPS): Coletamos a sua localização em segundo plano exclusivamente para notificar o Goleiro sobre partidas próximas.
+• Não vendemos seus dados. Seu nome será exibido para outros usuários apenas no contexto da partida confirmada.
+
+7. BLOQUEIO E EXCLUSÃO DE CONTA
+O Defende Pra Mim preza pelo respeito. Reservamo-nos o direito de banir permanentemente usuários que cometerem agressões, praticarem fraudes ou acumularem sucessivas faltas injustificadas.
+
+8. DIREITOS DE IMAGEM E MARKETING
+O Usuário autoriza, de forma gratuita, o uso de seu primeiro nome e foto de perfil (quando cadastrada) em materiais de divulgação institucional e publicitária do próprio Defende Pra Mim (como redes sociais e campanhas do app), respeitando sempre a moral, a boa-fé e o contexto esportivo.
+
+Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e aceitado todos os termos acima.''',
+                          textAlign: TextAlign.left,
+                          style: TextStyle( // <-- Sem const aqui
                             color: Colors.white70,
                             fontSize: 14,
                             height: 1.5,
@@ -147,6 +187,7 @@ Future<void> _entrarComGoogle() async {
                       ),
                     ),
                   ),
+
                   
                   const SizedBox(height: 16),
                   
@@ -338,7 +379,7 @@ Future<void> _entrarComGoogle() async {
       child: OutlinedButton(
         onPressed: onPressed,
         style: OutlinedButton.styleFrom(
-          side: BorderSide(color: color.withOpacity(0.5), width: 1.5),
+          side: BorderSide(color: color.withAlpha(128), width: 1.5),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
         child: Text(label, style: TextStyle(fontWeight: FontWeight.bold, color: color)),

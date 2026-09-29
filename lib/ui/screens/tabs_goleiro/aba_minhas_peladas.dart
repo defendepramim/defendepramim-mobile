@@ -5,9 +5,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:defendepramim/services/push_notification_service.dart';
-import 'package:url_launcher/url_launcher.dart'; // 🟢 INJETADO PARA ABRIR O MAPA
 import 'package:defendepramim/ui/widgets/card_agenda_goleiro.dart';
 import 'package:defendepramim/ui/widgets/card_historico_goleiro.dart';
+import 'package:geolocator/geolocator.dart';
 
 class AbaMinhasPeladas extends StatefulWidget {
   const AbaMinhasPeladas({super.key});
@@ -29,6 +29,9 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
     
     // 🟢 LIGA O MOTOR DE NOTIFICAÇÕES
     PushNotificationService().inicializar();
+    
+    // 🟢 LIGA O RADAR DE GPS (Silencioso)
+    _atualizarLocalizacaoSilenciosa();
     
     _sincronizarRelogio();
     _timer = Timer.periodic(const Duration(seconds: 30), (timer) {
@@ -54,19 +57,41 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
     );
   }
 
-  Future<void> _sincronizarRelogio() async {
+Future<void> _sincronizarRelogio() async {
+    // ... seu código que já existe ...
+  }
+
+  // 🟢 NOVA FUNÇÃO: ATUALIZA O GPS DO GOLEIRO SILENCIOSAMENTE
+  Future<void> _atualizarLocalizacaoSilenciosa() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
     try {
-      final docRef = FirebaseFirestore.instance.collection('temp_time').doc();
-      await docRef.set({'hora': FieldValue.serverTimestamp()});
-      final snap = await docRef.get();
-      await docRef.delete();
-      if (mounted) {
-        final DateTime horaReal = (snap.get('hora') as Timestamp).toDate();
-        setState(
-          () => _diferencaServidor = horaReal.difference(DateTime.now()),
-        );
+      bool servicoAtivo = await Geolocator.isLocationServiceEnabled();
+      if (!servicoAtivo) return; 
+
+      LocationPermission permissao = await Geolocator.checkPermission();
+      if (permissao == LocationPermission.denied) {
+        permissao = await Geolocator.requestPermission();
+        if (permissao == LocationPermission.denied) return;
       }
-    } catch (_) {}
+      if (permissao == LocationPermission.deniedForever) return;
+
+      Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium, 
+      );
+
+      await FirebaseFirestore.instance.collection('usuarios').doc(user.uid).update({
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'ultimaAtualizacaoGPS': FieldValue.serverTimestamp(),
+      });
+      
+      debugPrint("📍 GPS do Goleiro atualizado no banco com sucesso!");
+
+    } catch (e) {
+      debugPrint("Erro ao atualizar GPS silencioso: $e");
+    }
   }
 
   DateTime _obterHoraRealAgora() => DateTime.now().add(_diferencaServidor);
@@ -286,10 +311,37 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
     }
   }
 
-  // --- 🛠️ LÓGICA DE DESISTÊNCIA (CORRIGIDA E REPOSICIONADA) ---
-  void _dialogoDesistencia(String idJogo, DateTime dataJogo) {
+  // --- 🛠️ LÓGICA DE DESISTÊNCIA (GOLEIRO) DINÂMICA ---
+  Future<void> _dialogoDesistencia(String idJogo, DateTime dataJogo, String localJogo) async {
+    setState(() => _isLoading = true);
+
+    // Valores padrão de segurança
+    int horasRegraMulta = 12;
+    double valorRegraMulta = 10.0;
+
+    try {
+      final configDoc = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
+      if (configDoc.exists) {
+        final dados = configDoc.data();
+        if (dados?['horasMultaCancelamento'] != null) {
+          horasRegraMulta = (dados?['horasMultaCancelamento'] as num).toInt();
+        }
+        if (dados?['valorMultaCancelamento'] != null) {
+          valorRegraMulta = (dados?['valorMultaCancelamento'] as num).toDouble();
+        }
+      }
+    } catch (e) {
+      debugPrint("Erro ao buscar regra de multa, usando padrão: $e");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+
     final int diffHoras = dataJogo.difference(_obterHoraRealAgora()).inHours;
-    final double multa = diffHoras < 4 ? 10.0 : 0.0;
+    
+    // 🟢 Cálculo com a regra dinâmica do Firebase!
+    final double multa = diffHoras < horasRegraMulta ? valorRegraMulta : 0.0;
+
+    if (!mounted) return;
 
     showDialog(
       context: context,
@@ -302,8 +354,8 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
         ),
         content: Text(
           multa > 0
-              ? "⚠️ Uma multa de R\$ ${multa.toStringAsFixed(2)} será aplicada, pois faltam menos de 4h para o jogo."
-              : "Confirmar desistência?",
+              ? "⚠️ Uma multa de R\$ ${multa.toStringAsFixed(2)} será aplicada, pois faltam menos de $horasRegraMulta horas para o jogo."
+              : "Tem certeza que deseja cancelar? (Nenhuma multa será cobrada)",
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -315,25 +367,37 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () {
               Navigator.pop(context);
-              _executarDesistencia(idJogo, multa);
+              // 🟢 Mandando o local pro motor de execução
+              _executarDesistencia(idJogo, multa, horasRegraMulta, localJogo); 
             },
-            child: const Text("CONFIRMAR"),
+            child: const Text("CONFIRMAR", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _executarDesistencia(String idJogo, double multa) async {
+Future<void> _executarDesistencia(String idJogo, double multa, int horasRegraMulta, String localJogo) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     setState(() => _isLoading = true);
 
     try {
-      // Usamos um WriteBatch para garantir que tudo aconteça junto
+      // 1. Busca todas as mensagens antigas trocadas neste jogo para apagar
+      final mensagensSnap = await FirebaseFirestore.instance
+          .collection('jogos')
+          .doc(idJogo)
+          .collection('mensagens')
+          .get();
+
       final batch = FirebaseFirestore.instance.batch();
 
-      // 1. Referência do Jogo (Volta a ficar disponível para outros)
+      // 🧹 LIMPEZA DO CHAT: Deleta o histórico antigo para o próximo goleiro não ler
+      for (var doc in mensagensSnap.docs) {
+        batch.delete(doc.reference);
+      }
+
+      // 2. Referência do Jogo (Volta a ficar disponível para outros)
       final jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
 
       batch.update(jogoRef, {
@@ -343,34 +407,35 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
         'desistentes': FieldValue.arrayUnion([uid]),
       });
 
-      // 2. Se houver multa, criamos o registro no extrato
+      final userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
+
+      // 3. Registra a multa e a falta caso tenha desistido em cima da hora
       if (multa > 0) {
-        final extratoRef = FirebaseFirestore.instance
-            .collection('usuarios')
-            .doc(uid)
-            .collection('extrato')
-            .doc();
+        final extratoRef = userRef.collection('extrato').doc();
 
         batch.set(extratoRef, {
           "id": extratoRef.id,
           "idReferencia": idJogo,
           "tipo": "multa_desistencia",
           "valor": multa,
-          "descricao": "Multa: Desistência < 4h",
+          "descricao": "Multa: Desistência < ${horasRegraMulta}h\nLocal: ${localJogo.split('(')[0].trim()}",
           "data": FieldValue.serverTimestamp(),
           "status": "concluido",
         });
 
-        final userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-        batch.update(userRef, {'multasPendentes': FieldValue.increment(multa)});
+        batch.update(userRef, {
+          'multasPendentes': FieldValue.increment(multa),
+          'faltas': FieldValue.increment(1),
+        });
       }
 
-      await batch.commit(); // Executa todas as operações
-      _showSnackBar("Desistência concluída.");
+      await batch.commit(); 
+      _showSnackBar(multa > 0 ? "Desistência realizada. Multa e falta registradas." : "Desistência concluída.");
     } catch (e) {
       _showSnackBar("Erro ao processar desistência.");
+      debugPrint("Erro na desistência: $e");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -423,14 +488,15 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
       dataAlvoReal = dtAbsoluta;
     }
 
-    return CardAgendaGoleiro(
+return CardAgendaGoleiro(
       id: doc.id,
       jogo: jogo,
       cat: categoria,
       tempoRestante: _formatarTempoRestante(dataAlvoReal, jogo['duracao'] ?? 60),
       onAceitarContestacao: () => _aceitarContestacao(doc.id),
       onDefenderContestacao: () => _abrirModalDefesa(doc.id),
-      onDesistirPartida: () => _dialogoDesistencia(doc.id, dataAlvoReal),
+      // 🟢 PASSO A: Enviar o local do jogo para a função
+      onDesistirPartida: () => _dialogoDesistencia(doc.id, dataAlvoReal, jogo['local'] ?? 'Endereço não informado'),
     );
   }
 
@@ -674,15 +740,22 @@ class _AbaMinhasPeladasState extends State<AbaMinhasPeladas> {
   }
 
   Widget _headerSection(String t, Color c) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 15),
-    child: Text(
-      t,
-      style: TextStyle(
-        color: c,
-        fontSize: 10,
-        fontWeight: FontWeight.bold,
-        letterSpacing: 1.2,
-      ),
+    // 🚀 AQUI: Mais espaço em cima (24) e um pouquinho mais embaixo (16)
+    padding: const EdgeInsets.only(top: 24, bottom: 16),
+    child: Row(
+      children: [
+        Text(
+          t,
+          style: TextStyle(
+            color: c,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Divider(color: c.withAlpha(26), thickness: 1)),
+      ],
     ),
   );
 

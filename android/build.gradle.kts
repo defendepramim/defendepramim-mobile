@@ -1,6 +1,6 @@
 plugins {
     id("com.google.gms.google-services") version "4.4.1" apply false
-    // ... outros plugins que já estiverem aí (como o do flutter/kotlin)
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false // 🟢 KOTLIN DECLARADO AQUI!
 }
 
 allprojects {

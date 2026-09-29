@@ -24,7 +24,7 @@ class _ModalCadastroPixState extends State<ModalCadastroPix> {
   final TextEditingController _cConfirmaPix = TextEditingController();
   
   String _tipoPixSelecionado = "CPF";
-  final List<String> _tiposPix = ["CPF", "Celular", "E-mail", "Chave Aleatória"];
+  final List<String> _tiposPix = ["CPF", "Telefone", "E-mail", "Chave Aleatória"];
   bool _salvando = false;
 
   @override

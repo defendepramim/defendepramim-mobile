@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -8,7 +9,7 @@ import 'package:defendepramim/ui/screens/mapa_seletor_page.dart';
 class TelaCriarJogo extends StatefulWidget {
   final Map<String, dynamic>? dados;
   final VoidCallback? onFinalizado;
-
+  
   const TelaCriarJogo({super.key, this.dados, this.onFinalizado});
 
   @override
@@ -20,17 +21,18 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
   final Color primaryColor = const Color(0xFF00E676);
   final Color surfaceColor = const Color(0xFF121212);
 
-  // --- ESTADO ---
+  // --- ESTADO DA PARTIDA ---
   DateTime? dataSelecionada;
   TimeOfDay? horarioSelecionado;
-  int duracaoSelecionada = 1;
+  int duracaoSelecionada = 60;
   String localSelecionado = "";
   String observacoes = "";
   String nivelGoleiro = "";
+  String tipoQuadra = "";
   double valorJogo = 0.0;
   bool _processando = false;
 
-  // ✨ VARIÁVEIS DINÂMICAS DO FIREBASE
+  // --- VARIÁVEIS DINÂMICAS DO FIREBASE ---
   bool _carregandoConfig = true;
   int _horasAntecedencia = 2;
   int _tempoDeslocamentoMin = 30; 
@@ -46,50 +48,88 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
   String nomeQuadraSalvar = "";
   String enderecoRuaSalvar = "";
 
+  int _horasMultaCancelamento = 12;
+  double _valorMulta = 10.0;
+
+  // 🟢 NOVAS VARIÁVEIS DE REQUISITO (MANTENDO SINCRONIA COM O ADMIN)
+  int _reqExperientePartidas = 5;
+  double _reqExperienteNota = 4.2;
+  int _reqElitePartidas = 15;
+  double _reqEliteNota = 4.5;
+
+  // --- TRAVAS DOS NÍVEIS (REATIVAS DO ADMIN) ---
+  bool _nivelLivreAtivo = true;
+  bool _nivelInterAtivo = false; 
+  bool _nivelEliteAtivo = false;
+  StreamSubscription<DocumentSnapshot>? _configSubscription;
+
   final TextEditingController _cLoc = TextEditingController();
   final TextEditingController _cObs = TextEditingController();
 
+  // --- GETTERS DE VALIDAÇÃO ---
   bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
   bool get localOk => localSelecionado.isNotEmpty && latitudeJogo != null && longitudeJogo != null;
+  bool get quadraOk => tipoQuadra.isNotEmpty;
   bool get nivelOk => nivelGoleiro.isNotEmpty;
-  bool get tudoPronto => dataOk && localOk && nivelOk;
+  bool get tudoPronto => dataOk && localOk && quadraOk && nivelOk;
+  
   double? latitudeJogo;
   double? longitudeJogo;
 
   @override
   void initState() {
     super.initState();
-    _buscarConfiguracoesGlobais().then((_) {
-      if (widget.dados != null) carregarDadosEdicao();
-    });
+    _escutarConfiguracoesGlobais(); 
+    if (widget.dados != null) carregarDadosEdicao();
   }
 
   @override
   void dispose() {
+    _configSubscription?.cancel(); 
     _cLoc.dispose();
     _cObs.dispose();
     super.dispose();
   }
 
-  Future<void> _buscarConfiguracoesGlobais() async {
-    try {
-      final doc = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
-      if (doc.exists) {
+  // 🟢 ESCUTA EM TEMPO REAL
+  void _escutarConfiguracoesGlobais() {
+    _configSubscription = FirebaseFirestore.instance
+        .collection('configuracoes')
+        .doc('global')
+        .snapshots()
+        .listen((doc) {
+      if (doc.exists && mounted) {
         final d = doc.data()!;
-        _horasAntecedencia = (d['horasAntecedencia'] ?? 2).toInt();
-        _tempoDeslocamentoMin = (d['tempoDeslocamentoMinutos'] ?? 30).toInt();
-        _precoVarzea = (d['precoVarzea'] ?? 35.0).toDouble();
-        _precoInter = (d['precoInter'] ?? 36.0).toDouble();
-        _precoElite = (d['precoElite'] ?? 38.0).toDouble();
-        _taxaAppVarzea = (d['taxaAppVarzea'] ?? 5.0).toDouble();
-        _taxaAppInter = (d['taxaAppInter'] ?? 6.0).toDouble();
-        _taxaAppElite = (d['taxaAppElite'] ?? 8.0).toDouble();
+        setState(() {
+          _horasAntecedencia = (d['horasAntecedencia'] ?? 2).toInt();
+          _tempoDeslocamentoMin = (d['tempoDeslocamentoMinutos'] ?? 30).toInt();
+          _precoVarzea = (d['precoVarzea'] ?? 35.0).toDouble();
+          _precoInter = (d['precoInter'] ?? 36.0).toDouble();
+          _precoElite = (d['precoElite'] ?? 38.0).toDouble();
+          _taxaAppVarzea = (d['taxaAppVarzea'] ?? 5.0).toDouble();
+          _taxaAppInter = (d['taxaAppInter'] ?? 6.0).toDouble();
+          _taxaAppElite = (d['taxaAppElite'] ?? 8.0).toDouble();
+
+          _horasMultaCancelamento = (d['horasMultaCancelamento'] ?? 12).toInt();
+          _valorMulta = (d['valorMultaCancelamento'] ?? 10.0).toDouble();
+
+          _nivelLivreAtivo = d['nivelLivreAtivo'] ?? true;
+          _nivelInterAtivo = d['nivelInterAtivo'] ?? false;
+          _nivelEliteAtivo = d['nivelEliteAtivo'] ?? false;
+
+          // Requisitos Dinâmicos Injetados!
+          _reqExperientePartidas = (d['reqExperientePartidas'] ?? 5).toInt();
+          _reqExperienteNota = (d['reqExperienteNota'] ?? 4.2).toDouble();
+          _reqElitePartidas = (d['reqElitePartidas'] ?? 15).toInt();
+          _reqEliteNota = (d['reqEliteNota'] ?? 4.5).toDouble();
+
+          _carregandoConfig = false;
+        });
       }
-    } catch (e) {
-      debugPrint("Erro ao carregar configs globais, usando padrão. Erro: $e");
-    } finally {
+    }, onError: (e) {
+      debugPrint("Erro ao escutar configs globais: $e");
       if (mounted) setState(() => _carregandoConfig = false);
-    }
+    });
   }
 
   void _showSuccessVisual(String mensagem, VoidCallback aoFinalizar) {
@@ -97,7 +137,10 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       context: context,
       barrierDismissible: false,
       builder: (ctx) {
-        Future.delayed(const Duration(milliseconds: 1500), () {
+      Future.delayed(const Duration(milliseconds: 1500), () {
+          // 🛡️ O ESCUDO: Verifica se o contexto deste dialog ainda existe!
+          if (!ctx.mounted) { return; }
+
           if (Navigator.canPop(ctx)) {
             Navigator.pop(ctx);
             aoFinalizar();
@@ -110,7 +153,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             decoration: BoxDecoration(
               color: const Color(0xFF1E1E1E),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: primaryColor.withOpacity(0.5)),
+              border: Border.all(color: primaryColor..withAlpha(13)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -135,6 +178,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       observacoes = widget.dados!["observacoes"] ?? "";
       valorJogo = (widget.dados!["valor"] ?? 0.0).toDouble();
       nivelGoleiro = widget.dados!["nivelGoleiro"] ?? "";
+      tipoQuadra = widget.dados!["tipoQuadra"] ?? "";
 
       _cLoc.text = localSelecionado;
       _cObs.text = observacoes;
@@ -170,7 +214,6 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     }
   }
 
-  // 🟢 NOVO MÉTODO: Checa os conflitos de agenda blindando antes e depois do jogo!
   Future<String?> _verificarConflitoAgenda(DateTime inicioNovoJogo, int duracaoMinutos) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return null;
@@ -193,17 +236,12 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       String localEx = doc['local'] ?? "outro local";
       String horaEx = doc['horaExibicao'] ?? "--:--";
 
-      // Presume deslocamento se for local diferente ou se ele ainda não preencheu o local atual
       bool precisaDeslocamento = localSelecionado.isEmpty || (localEx.toLowerCase() != localSelecionado.toLowerCase());
-      
-      // Pega o tempo de deslocamento do Firebase (se não precisar, vira 0)
       int tempoExtra = precisaDeslocamento ? _tempoDeslocamentoMin : 0;
 
-      // 🛡️ O SEGREDO ESTÁ AQUI: Cria um "escudo" antes e depois do jogo que já existe
       DateTime inicioExComBuffer = inicioExistente.subtract(Duration(minutes: tempoExtra));
       DateTime fimExComBuffer = fimExistente.add(Duration(minutes: tempoExtra));
 
-      // Verifica se o novo jogo entra no meio do jogo existente (ou dentro do seu escudo de deslocamento)
       if (inicioNovoJogo.isBefore(fimExComBuffer) && fimNovoJogo.isAfter(inicioExComBuffer)) {
         String durFormat = duracaoExMinutos >= 60 ? "${(duracaoExMinutos / 60).toStringAsFixed(1)}h" : "$duracaoExMinutos min";
 
@@ -214,10 +252,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         }
       }
     }
-    return null; // Tudo limpo!
+    return null;
   }
 
-  // 🟢 MÉTODO REDUZIDO E LIMPO: Apenas validação financeira antes do final
   Future<void> validarEProcessar() async {
     setState(() => _processando = true);
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -268,28 +305,30 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                   children: [
                     const SizedBox(height: 5),
                     _buildProgressBar(),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16), // Espaçamento reduzido
 
-                    Center(
-                      child: Text(
-                        "Quais são os\ndetalhes da pelada?",
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white, height: 1.1),
-                      ),
+                    // 1. CABEÇA DA TELA ENXUTA
+                    const Text(
+                      "Quais são os detalhes da pelada?",
+                      textAlign: TextAlign.left,
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, height: 1.1),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 16), // Espaçamento reduzido
 
+                    // 2. MANTÉM OS DOIS PRIMEIROS CARDS INTEIROS
                     _cardModuloMaster(
-                      titulo: dataOk ? "${dataSelecionada!.day}/${dataSelecionada!.month} às ${horarioSelecionado!.format(context)}" : "Data, Início e Duração",
-                      subtitulo: dataOk ? "${(duracaoSelecionada / 60).toStringAsFixed(0)}h de partida" : "Quando e quanto tempo?",
+                      titulo: dataOk 
+    ? "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')} às ${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}" 
+    : "Data e Hora",
+                      subtitulo: dataOk ? "${(duracaoSelecionada / 60).toStringAsFixed(0)}h de jogo" : "Quando e duração?",
                       icone: CupertinoIcons.calendar,
                       concluido: dataOk,
                       onTap: _abrirModuloTempo,
                     ),
 
                     _cardModuloMaster(
-                      titulo: localOk ? localSelecionado : "Local e Detalhes",
-                      subtitulo: localOk ? (observacoes.isEmpty ? "Toque para alterar o local" : observacoes) : "Onde vai ser o jogo?",
+                      titulo: localOk ? localSelecionado : "Local",
+                      subtitulo: localOk ? (observacoes.isEmpty ? "Toque para alterar" : observacoes) : "Onde vai ser?",
                       icone: CupertinoIcons.location_solid,
                       concluido: localOk,
                       onTap: () async {
@@ -316,12 +355,27 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                       },
                     ),
 
-                    _cardModuloMaster(
-                      titulo: nivelOk ? "Goleiro $nivelGoleiro" : "Nível do Goleiro",
-                      subtitulo: nivelOk ? "Requisito definido" : "Qual o nível do arqueiro?",
-                      icone: Icons.front_hand_rounded,
-                      concluido: nivelOk,
-                      onTap: _abrirSeletorNivelGoleiro,
+                    // 3. A GRANDE MUDANÇA: LADO A LADO!
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _cardMini(
+                            titulo: quadraOk ? _resumirTextoQuadra(tipoQuadra) : "Quadra",
+                            icone: Icons.grass_outlined,
+                            concluido: quadraOk,
+                            onTap: _abrirSeletorTipoQuadra,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _cardMini(
+                            titulo: nivelOk ? nivelGoleiro : "Nível",
+                            icone: Icons.front_hand_rounded,
+                            concluido: nivelOk,
+                            onTap: _abrirSeletorNivelGoleiro,
+                          ),
+                        ),
+                      ],
                     ),
 
                     const SizedBox(height: 20),
@@ -336,9 +390,10 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
   Widget _buildProgressBar() {
     double progresso = 0.00;
-    if (dataOk) progresso += 0.34;
-    if (localOk) progresso += 0.33;
-    if (nivelOk) progresso += 0.33;
+    if (dataOk) progresso += 0.25;
+    if (localOk) progresso += 0.25;
+    if (quadraOk) progresso += 0.25;
+    if (nivelOk) progresso += 0.25;
     if (progresso > 1.0) progresso = 1.0;
 
     return Column(
@@ -347,7 +402,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           borderRadius: BorderRadius.circular(10),
           child: LinearProgressIndicator(
             value: progresso,
-            backgroundColor: Colors.white.withOpacity(0.05),
+            backgroundColor: Colors.white..withAlpha(13),
             valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
             minHeight: 4,
           ),
@@ -357,7 +412,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           alignment: Alignment.centerRight,
           child: Text(
             "${(progresso * 100).toInt()}% COMPLETO",
-            style: TextStyle(color: primaryColor.withOpacity(0.6), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+            style: TextStyle(color: primaryColor..withAlpha(153), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5),
           ),
         ),
       ],
@@ -371,17 +426,17 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14), // Padding reduzido de 16 para 14
           decoration: BoxDecoration(
             color: const Color(0xFF1E1E1E),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: concluido ? primaryColor.withOpacity(0.4) : Colors.white.withOpacity(0.05)),
+            border: Border.all(color: concluido ? primaryColor.withAlpha(102) : Colors.white.withAlpha(13)),
           ),
           child: Row(
             children: [
               Container(
                 padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: concluido ? primaryColor.withOpacity(0.1) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(10)),
+                decoration: BoxDecoration(color: concluido ? primaryColor.withAlpha(26) : Colors.white.withAlpha(13), borderRadius: BorderRadius.circular(10)),
                 child: Icon(icone, color: concluido ? primaryColor : Colors.white54, size: 22),
               ),
               const SizedBox(width: 14),
@@ -391,7 +446,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                   children: [
                     Text(titulo, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 2),
-                    Text(subtitulo, style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12)),
+                    Text(subtitulo, style: TextStyle(color: Colors.white.withAlpha(102), fontSize: 12)),
                   ],
                 ),
               ),
@@ -403,13 +458,55 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
 
+  // Novo Card Menor para itens lado a lado
+  Widget _cardMini({required String titulo, required IconData icone, required bool concluido, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: concluido ? primaryColor.withAlpha(102) : Colors.white.withAlpha(13)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: concluido ? primaryColor.withAlpha(26) : Colors.white.withAlpha(13), borderRadius: BorderRadius.circular(10)),
+              child: Icon(icone, color: concluido ? primaryColor : Colors.white54, size: 20),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              titulo, 
+              textAlign: TextAlign.center,
+              style: TextStyle(color: concluido ? Colors.white : Colors.white54, fontSize: 13, fontWeight: FontWeight.bold),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  // Função auxiliar para evitar que o texto do tipo de quadra quebre a linha no Card Mini
+  String _resumirTextoQuadra(String quadra) {
+    if(quadra.contains("Futsal")) return "Futsal";
+    if(quadra.contains("Society")) return "Society";
+    if(quadra.contains("Campo")) return "Campo";
+    if(quadra.contains("Areia")) return "Areia";
+    return quadra;
+  }
+
   Widget _barraAcaoFinal() {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1A),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withAlpha(13)),
       ),
       child: Row(
         children: [
@@ -417,23 +514,23 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("INVESTIMENTO", style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                Text("INVESTIMENTO", style: TextStyle(color: Colors.white..withAlpha(13), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
                 const SizedBox(height: 4),
-                Text(nivelOk ? "R\$ ${valorJogo.toStringAsFixed(2)}" : "---", style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                Text(tudoPronto ? "R\$ ${valorJogo.toStringAsFixed(2)}" : "---", style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
           SizedBox(
-            height: 46,
-            width: 125,
+            height: 50, // Aumentei um pouco a altura para ficar mais tocável
+            width: 140, // Mais espaço para a palavra CONTINUAR
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: tudoPronto ? primaryColor : const Color(0xFF333333),
                 foregroundColor: Colors.black,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), // Mais arredondado
               ),
               onPressed: tudoPronto ? validarEProcessar : null,
-              child: const Text("CONTINUAR", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+              child: const Text("CONTINUAR", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)),
             ),
           ),
         ],
@@ -441,7 +538,6 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
 
-// 🟢 ABERTURA DO MODAL: Injetando a inteligência para validar dentro do Picker!
   void _abrirModuloTempo() async {
     setState(() => _processando = true);
 
@@ -456,27 +552,22 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             dataInicial: dataSelecionada, 
             horaInicial: horarioSelecionado,
             
-            // Injetamos a validação dinâmica do Firebase direto pro botão do Picker!
             validadorExterno: (dataHoraDesejada, duracaoMinutos) async {
-              
-              // 1. Usa o "_horasAntecedencia" (2) do Firebase para bloquear o passado próximo
               if (dataHoraDesejada.isBefore(agoraReal.add(Duration(hours: _horasAntecedencia)))) {
                 return "A convocação exige $_horasAntecedencia horas de antecedência mínima!";
               }
 
-              // 2. Aciona o verificador de conflitos ajustado com o tempo do ADM (0)
               String? msgConflito = await _verificarConflitoAgenda(dataHoraDesejada, duracaoMinutos);
               if (msgConflito != null) {
                 return msgConflito; 
               }
 
-              return null; // Tudo verde, pode fechar a tela de tempo!
+              return null;
             },
           ),
         ),
       );
 
-      // Só chega aqui se o usuário passou pelas regras do ADM e confirmou.
       if (res != null && res is DadosTempo) {
         setState(() {
           dataSelecionada = res.data;
@@ -496,7 +587,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     }
   }
 
-  void _abrirSeletorNivelGoleiro() {
+  void _abrirSeletorTipoQuadra() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A1A),
@@ -507,11 +598,12 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           children: [
             const Padding(
               padding: EdgeInsets.all(20),
-              child: Text("Selecione o Nível", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              child: Text("Tipo de Quadra", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
             ),
-            _opcaoNivel("Várzea (Livre)", _precoVarzea),
-            _opcaoNivel("Intermediário (Médio)", _precoInter),
-            _opcaoNivel("Elite (Master)", _precoElite),
+            _opcaoQuadra("Futsal (Quadra)"),
+            _opcaoQuadra("Society (Sintético)"),
+            _opcaoQuadra("Futebol de Campo (Grama)"),
+            _opcaoQuadra("Areia / Beach Soccer"),
             const SizedBox(height: 10), 
           ],
         ),
@@ -519,18 +611,185 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
 
-  Widget _opcaoNivel(String nome, double precoBase) {
+  Widget _opcaoQuadra(String nome) {
     return ListTile(
+      leading: Icon(
+        nome.contains("Futsal") ? Icons.sports_volleyball :
+        nome.contains("Society") ? Icons.grass :
+        nome.contains("Areia") ? Icons.beach_access : Icons.stadium,
+        color: primaryColor,
+      ),
       title: Text(nome, style: const TextStyle(color: Colors.white)),
-      trailing: Text("R\$ ${precoBase.toStringAsFixed(2)}/h", style: TextStyle(color: primaryColor)),
       onTap: () {
         setState(() {
-          nivelGoleiro = nome;
-          double horasJogadas = duracaoSelecionada / 60;
-          valorJogo = precoBase * horasJogadas;
+          tipoQuadra = nome;
         });
         Navigator.pop(context);
       },
+    );
+  }
+
+  void _abrirSeletorNivelGoleiro() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10))),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 10),
+              child: Column(
+                children: [
+                  Text("Nível do Goleiro", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  SizedBox(height: 4),
+                  Text("Escolha o perfil de goleiro desejado para a partida", style: TextStyle(color: Colors.white54, fontSize: 12)),
+                ],
+              ),
+            ),
+            const Divider(color: Colors.white10),
+
+            _opcaoNivel(
+              nome: "⚽ Livre (Aberto)",
+              subtitulo: "Disponível para todos os goleiros cadastrados.",
+              precoBase: _precoVarzea,
+              bloqueado: !_nivelLivreAtivo,
+              onTap: !_nivelLivreAtivo
+                  ? () => _mostrarAvisoEmBreve("Livre")
+                  : () {
+                      setState(() {
+                        nivelGoleiro = "Livre";
+                        double horasJogadas = duracaoSelecionada / 60;
+                        valorJogo = _precoVarzea * horasJogadas;
+                      });
+                      Navigator.pop(context);
+                    },
+            ),
+
+            // 🟢 TEXTO AGORA É DINÂMICO BASEADO NO BANCO DE DADOS
+            _opcaoNivel(
+              nome: "🛡️ Experiente",
+              subtitulo: "Requer $_reqExperientePartidas+ partidas e nota média ≥ ${_reqExperienteNota.toStringAsFixed(1)}★",
+              precoBase: _precoInter,
+              bloqueado: !_nivelInterAtivo,
+              onTap: !_nivelInterAtivo
+                  ? () => _mostrarAvisoEmBreve("Experiente")
+                  : () {
+                      setState(() {
+                        nivelGoleiro = "Experiente";
+                        double horasJogadas = duracaoSelecionada / 60;
+                        valorJogo = _precoInter * horasJogadas;
+                      });
+                      Navigator.pop(context);
+                    },
+            ),
+
+            // 🟢 TEXTO AGORA É DINÂMICO BASEADO NO BANCO DE DADOS
+            _opcaoNivel(
+              nome: "🥇 Elite / Paredão",
+              subtitulo: "Requer $_reqElitePartidas+ partidas e nota média ≥ ${_reqEliteNota.toStringAsFixed(1)}★",
+              precoBase: _precoElite,
+              bloqueado: !_nivelEliteAtivo,
+              onTap: !_nivelEliteAtivo
+                  ? () => _mostrarAvisoEmBreve("Elite")
+                  : () {
+                      setState(() {
+                        nivelGoleiro = "Elite";
+                        double horasJogadas = duracaoSelecionada / 60;
+                        valorJogo = _precoElite * horasJogadas;
+                      });
+                      Navigator.pop(context);
+                    },
+            ),
+
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _opcaoNivel({
+    required String nome,
+    required String subtitulo,
+    required double precoBase,
+    required bool bloqueado,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      onTap: onTap,
+      title: Row(
+        children: [
+          Text(
+            nome,
+            style: TextStyle(
+              color: bloqueado ? Colors.white38 : Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 15,
+            ),
+          ),
+          if (bloqueado) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.amber.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.amber..withAlpha(13), width: 0.8),
+              ),
+              child: const Text(
+                "EM BREVE",
+                style: TextStyle(color: Colors.amber, fontSize: 9, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ],
+      ),
+      subtitle: Text(
+        subtitulo,
+        style: TextStyle(color: bloqueado ? Colors.white24 : Colors.white54, fontSize: 11),
+      ),
+      trailing: Text(
+        "R\$ ${precoBase.toStringAsFixed(2)}/h",
+        style: TextStyle(
+          color: bloqueado ? Colors.white24 : primaryColor,
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+
+  void _mostrarAvisoEmBreve(String nivel) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.lock_clock, color: Colors.amber, size: 24),
+            const SizedBox(width: 10),
+            Text("Nível $nivel", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: Text(
+          "Estamos em fase inicial de convocações!\n\nOs filtros de goleiros $nivel serão liberados automaticamente à medida que nossa comunidade de goleiros realizar partidas e acumular avaliações na plataforma.",
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("ENTENDI", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -555,9 +814,18 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             const SizedBox(height: 20),
             TextField(
               controller: recargaController,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(labelText: "Valor para adicionar", labelStyle: TextStyle(color: Colors.grey), prefixText: "R\$ ", enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24))),
+              autofocus: true, // 🚀 Já abre o teclado direto!
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textAlign: TextAlign.center, // 🚀 Centraliza o dinheiro
+              style: TextStyle(color: primaryColor, fontSize: 32, fontWeight: FontWeight.bold), // 🚀 Fonte gigante de Fintech
+              decoration: InputDecoration(
+                prefixText: "R\$ ",
+                prefixStyle: const TextStyle(color: Colors.white54, fontSize: 20),
+                filled: true,
+                fillColor: Colors.black26,
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: primaryColor, width: 2)),
+              ),
             ),
           ],
         ),
@@ -619,9 +887,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           children: [
             const Text("CONFIRMAR CONVOCAÇÃO", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            _itemResumo(Icons.calendar_today, "Data/Hora", "${dataSelecionada!.day}/${dataSelecionada!.month} às ${horarioSelecionado!.format(context)}"),
+            _itemResumo(Icons.calendar_today, "Data/Hora", "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')} às ${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}"),
             _itemResumo(Icons.place, "Local", localSelecionado),
-            _itemResumo(Icons.timer, "Duração", "${(duracaoSelecionada / 60).toStringAsFixed(0)}h"),
+            _itemResumo(Icons.grass, "Quadra", tipoQuadra),
             _itemResumo(Icons.bolt, "Nível", nivelGoleiro),
             const Divider(color: Colors.white12, height: 24),
             Row(
@@ -631,7 +899,41 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                 Text("R\$ ${valorJogo.toStringAsFixed(2)}", style: TextStyle(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold)),
               ],
             ),
-            const SizedBox(height: 20),
+            
+            const SizedBox(height: 16),
+            
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.info_outline, color: Colors.grey, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Cancelamentos com menos de $_horasMultaCancelamento horas da partida terão retenção de R\$ ${_valorMulta.toStringAsFixed(2)}.",
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 8), // Espaçamento entre os avisos
+            
+            // --- AVISO 2: REGRA DO CONTRATO ASSINADO (Novo!) ---
+            const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.lock_outline, color: Colors.grey, size: 16),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Após um goleiro aceitar o convite, a edição de local e horário será bloqueada.",
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 24),
             SizedBox(
               width: double.infinity, height: 50,
               child: ElevatedButton(
@@ -670,12 +972,77 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
       setState(() => _processando = true);
 
-      final DateTime dataHoraInicio = DateTime(dataSelecionada!.year, dataSelecionada!.month, dataSelecionada!.day, horarioSelecionado!.hour, horarioSelecionado!.minute);
+      final DateTime dataHoraInicio = DateTime(
+        dataSelecionada!.year, 
+        dataSelecionada!.month, 
+        dataSelecionada!.day, 
+        horarioSelecionado!.hour, 
+        horarioSelecionado!.minute
+      );
       final DateTime dataHoraFim = dataHoraInicio.add(Duration(minutes: duracaoSelecionada));
 
+      String nomeFinalQuadra = nomeQuadraSalvar.isNotEmpty 
+          ? nomeQuadraSalvar 
+          : localSelecionado.split('(')[0].trim();
+          
+      String enderecoFinalQuadra = enderecoRuaSalvar.isNotEmpty 
+          ? enderecoRuaSalvar 
+          : (localSelecionado.contains('(') ? localSelecionado.split('(')[1].replaceAll(')', '').trim() : '');
+      
+      String nomeBuscaQuadra = nomeFinalQuadra.toLowerCase().trim();
+      String enderecoBuscaQuadra = enderecoFinalQuadra.toLowerCase().trim();
+
+      String? idQuadraVinculada = widget.dados?["idQuadra"];
+
+      if (idQuadraVinculada == null) {
+        try {
+          if (nomeBuscaQuadra.isNotEmpty) {
+            final snapNome = await FirebaseFirestore.instance
+                .collection('quadras')
+                .where('nomeBusca', isEqualTo: nomeBuscaQuadra)
+                .limit(1)
+                .get();
+
+            if (snapNome.docs.isNotEmpty) {
+              idQuadraVinculada = snapNome.docs.first.id;
+            }
+          }
+
+          if (idQuadraVinculada == null && latitudeJogo != null && longitudeJogo != null) {
+            final snapCoords = await FirebaseFirestore.instance
+                .collection('quadras')
+                .where('latitude', isGreaterThanOrEqualTo: latitudeJogo! - 0.0005)
+                .where('latitude', isLessThanOrEqualTo: latitudeJogo! + 0.0005)
+                .get();
+
+            for (var docQ in snapCoords.docs) {
+              final dQ = docQ.data();
+              double? lngQ = dQ['longitude']?.toDouble();
+              if (lngQ != null && (lngQ - longitudeJogo!).abs() <= 0.0005) {
+                idQuadraVinculada = docQ.id;
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint("Aviso na checagem de quadras duplicadas: $e");
+        }
+      }
+
       final DocumentReference userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-      final DocumentReference jogoRef = widget.dados != null ? FirebaseFirestore.instance.collection("jogos").doc(widget.dados!["id"]) : FirebaseFirestore.instance.collection("jogos").doc();
+      final DocumentReference jogoRef = widget.dados != null 
+          ? FirebaseFirestore.instance.collection("jogos").doc(widget.dados!["id"]) 
+          : FirebaseFirestore.instance.collection("jogos").doc();
+          
       final DocumentReference extratoRef = userRef.collection('extrato').doc();
+      
+      final DocumentReference? novaQuadraRef = (widget.dados == null && idQuadraVinculada == null) 
+          ? FirebaseFirestore.instance.collection('quadras').doc() 
+          : null;
+
+      if (novaQuadraRef != null) {
+        idQuadraVinculada = novaQuadraRef.id;
+      }
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         DocumentSnapshot userSnap = await transaction.get(userRef);
@@ -694,8 +1061,11 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         if (widget.dados == null) {
           descricaoExtrato = "Convocação: $localSelecionado";
         } else {
-          if (diferencaSaldo > 0) descricaoExtrato = "Estorno (Edição): $localSelecionado";
-          else if (diferencaSaldo < 0) descricaoExtrato = "Diferença (Edição): $localSelecionado";
+          if (diferencaSaldo > 0) {
+            descricaoExtrato = "Estorno (Edição): $localSelecionado";
+          // ignore: curly_braces_in_flow_control_structures
+          } else if (diferencaSaldo < 0) descricaoExtrato = "Diferença (Edição): $localSelecionado";
+          // ignore: curly_braces_in_flow_control_structures
           else descricaoExtrato = "Ajuste de detalhes: $localSelecionado";
         }
 
@@ -703,9 +1073,16 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
         if (diferencaSaldo != 0) {
           transaction.set(extratoRef, {
-            "id": extratoRef.id, "idUsuario": uid, "idReferencia": jogoRef.id, "tipo": diferencaSaldo > 0 ? "entrada" : "saida",
-            "valor": diferencaSaldo.abs(), "saldoAnterior": saldoAtualServidor, "saldoAtual": saldoDepois,
-            "descricao": descricaoExtrato, "categoria": "jogo", "data": FieldValue.serverTimestamp(),
+            "id": extratoRef.id, 
+            "idUsuario": uid, 
+            "idReferencia": jogoRef.id, 
+            "tipo": diferencaSaldo > 0 ? "entrada" : "saida",
+            "valor": diferencaSaldo.abs(), 
+            "saldoAnterior": saldoAtualServidor, 
+            "saldoAtual": saldoDepois,
+            "descricao": descricaoExtrato, 
+            "categoria": "jogo", 
+            "data": FieldValue.serverTimestamp(),
           });
         }
 
@@ -723,6 +1100,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             jogoRef,
             {
               "id": jogoRef.id, 
+              "idQuadra": idQuadraVinculada, 
               "local": localSelecionado, 
               "dataHora": Timestamp.fromDate(dataHoraInicio), 
               "dataHoraFim": Timestamp.fromDate(dataHoraFim),
@@ -734,6 +1112,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
               "nomeContratante": nomeContratanteLogado,
               "observacoes": observacoes, 
               "nivelGoleiro": nivelGoleiro, 
+              "tipoQuadra": tipoQuadra, 
               "duracao": duracaoSelecionada,
               "criadoEm": widget.dados?["criadoEm"] ?? FieldValue.serverTimestamp(), 
               "editadoEm": FieldValue.serverTimestamp(),
@@ -747,14 +1126,15 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             },
             SetOptions(merge: true));
 
-        if (widget.dados == null) { 
-          DocumentReference novaQuadraRef = FirebaseFirestore.instance.collection('quadras').doc();
-          
+        if (novaQuadraRef != null) { 
           transaction.set(novaQuadraRef, {
             "id": novaQuadraRef.id,
-            "nome": nomeQuadraSalvar,      
-            "endereco": enderecoRuaSalvar,  
+            "nome": nomeFinalQuadra,      
+            "endereco": enderecoFinalQuadra,  
+            "nomeBusca": nomeBuscaQuadra,       
+            "enderecoBusca": enderecoBuscaQuadra, 
             "observacoes": observacoes,
+            "tipoQuadra": tipoQuadra,
             
             "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
             "latitude": latitudeJogo,
@@ -769,8 +1149,11 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
       if (mounted) {
         _showSuccessVisual(widget.dados != null ? "Atualizado!" : "Publicado!", () {
-          if (widget.onFinalizado != null) widget.onFinalizado!();
-          else Navigator.pop(context);
+          if (widget.onFinalizado != null) {
+            widget.onFinalizado!();
+          } else {
+            Navigator.pop(context);
+          }
         });
       }
     } catch (e) {

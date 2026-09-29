@@ -2,7 +2,7 @@ import java.util.Properties // 🟢 O SEGREDO ESTAVA AQUI! Precisamos importar p
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
+    // ❌ id("kotlin-android") -> LINHA REMOVIDA PARA O BUILT-IN KOTLIN DO FLUTTER
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
@@ -39,7 +39,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders += mapOf("googleMapsApiKey" to (localProperties.getProperty("google.maps.key") ?: ""))
+        manifestPlaceholders += mapOf("googleMapsApiKey" to (localProperties.getProperty("googleMapsApiKey") ?: ""))
     }
 
     buildTypes {

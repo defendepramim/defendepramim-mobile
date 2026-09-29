@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class ServerTime {
   /// Obtém a hora atual confiável.
   /// No futuro, você pode trocar por uma chamada de API, 

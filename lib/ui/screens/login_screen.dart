@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; // 🟢 IMPORT ADICIONADO PARA LER O BANCO
+import 'package:cloud_firestore/cloud_firestore.dart'; 
 import 'package:flutter/services.dart';
 import '../widgets/campo_input.dart';
 
@@ -37,7 +37,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// 🛡️ LÓGICA: RECUPERAR SENHA (COM VERIFICAÇÃO INTELIGENTE)
+  /// 🛡️ LÓGICA: RECUPERAR SENHA
   Future<void> _recuperarSenha() async {
     final email = _emailController.text.trim().toLowerCase();
     if (email.isEmpty) {
@@ -46,24 +46,21 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     setState(() => _carregando = true);
-    FocusManager.instance.primaryFocus?.unfocus(); // Baixa o teclado
+    FocusManager.instance.primaryFocus?.unfocus(); 
 
     try {
-      // 1. Vai no nosso banco e verifica se existe algum usuário com esse e-mail
       final userQuery = await FirebaseFirestore.instance
           .collection('usuarios')
           .where('email', isEqualTo: email)
           .limit(1)
           .get();
 
-      // 2. Se a lista voltar vazia, o e-mail não existe no app!
       if (userQuery.docs.isEmpty) {
         _mostrarMensagem("Este e-mail não está cadastrado no sistema.");
         setState(() => _carregando = false);
         return;
       }
 
-      // 3. Se existe, aí sim a gente manda o link oficial do Firebase
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
       _mostrarMensagem("Link enviado! Verifique sua caixa de entrada.", erro: false);
       
@@ -75,7 +72,6 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   /// 🔑 LÓGICA: LOGIN
-  /// 🔑 LÓGICA: LOGIN
   Future<void> _fazerLogin() async {
     final email = _emailController.text.trim().toLowerCase();
     final senha = _senhaController.text.trim();
@@ -86,72 +82,24 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     setState(() => _carregando = true);
-    
-    // Fecha o teclado antes de iniciar o processo pesado de login
     FocusManager.instance.primaryFocus?.unfocus(); 
-
-    // 🧹 MÁGICA AQUI: Limpa qualquer SnackBar antigo que tenha ficado "preso" na tela
-    // antes de processar uma nova tentativa de login com outra conta.
     ScaffoldMessenger.of(context).clearSnackBars();
 
     try {
-      final userCred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
         password: senha,
       );
 
-      final user = userCred.user;
-
-      // 🚧 RETIRADO POR ENQUANTO: Para reativar a obrigatoriedade de verificar o e-mail,
-      // basta remover os comentários ( /* e */ ) deste bloco abaixo:
-      
-      /*
-      if (user != null && !user.emailVerified) {
-        await FirebaseAuth.instance.signOut(); // Desloga o teimoso na hora
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text("Você precisa verificar seu e-mail antes de entrar."),
-              backgroundColor: Colors.orangeAccent,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 6),
-              showCloseIcon: true, // ❌ COLOCA O 'X' PARA FECHAR MANUALMENTE
-              closeIconColor: Colors.black,
-              action: SnackBarAction(
-                label: 'REENVIAR',
-                textColor: Colors.black,
-                backgroundColor: const Color(0xFF00E676),
-                onPressed: () async {
-                  // Oculte o SnackBar imediatamente ao clicar antes de rodar o async
-                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                  
-                  try {
-                     final tempUser = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: senha);
-                     await tempUser.user!.sendEmailVerification();
-                     await FirebaseAuth.instance.signOut();
-                     _mostrarMensagem("Novo link enviado! Olhe o spam.", erro: false);
-                  } catch (e) {
-                     _mostrarMensagem("Erro ao reenviar. Tente novamente mais tarde.");
-                  }
-                },
-              ),
-            ),
-          );
-        }
-        return; // Interrompe o login e não deixa passar pra Home!
-      }
-      */
-
-      // Se passou pela validação, vai pra Home!
       if (mounted) {
-        Navigator.pop(context); // Fecha a tela de login
+        Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
       }
       
     } on FirebaseAuthException catch (e) {
       String mensagem = "E-mail ou senha incorretos.";
-      if (e.code == 'user-disabled') mensagem = "Conta desativada.";
-      else if (e.code == 'too-many-requests') mensagem = "Muitas tentativas. Aguarde.";
+      if (e.code == 'user-disabled') {
+        mensagem = "Conta desativada.";
+      } else if (e.code == 'too-many-requests') {mensagem = "Muitas tentativas. Aguarde.";};
       
       _mostrarMensagem(mensagem);
     } catch (e) {
@@ -165,9 +113,9 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     const primaryNeon = Color(0xFF00E676);
     
-    // ✨ CORREÇÃO DE PERFORMANCE AQUI: 
-    // Usamos a LARGURA da tela em vez da altura. 
-    final double logoSize = MediaQuery.of(context).size.width * 0.45; 
+    // 🚀 MUDANÇA AQUI: Tamanho fixo para evitar recálculo de layout do MediaQuery 
+    // 180 é o equivalente a ~45% de uma tela padrão.
+    const double logoSize = 180.0; 
     
     return Scaffold(
       backgroundColor: const Color(0xFF1E1E1E),
@@ -185,24 +133,23 @@ class _LoginScreenState extends State<LoginScreen> {
           behavior: HitTestBehavior.translucent,
           onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
           child: SingleChildScrollView(
-            // 🚀 MÁGICA DE PERFORMANCE: ClampingScrollPhysics impede que o Android tente
-            // calcular o efeito elástico invisível quando o teclado "esmaga" a tela.
             physics: const ClampingScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 28),
             child: Column(
               children: [
-                /// ⚽ LOGO HERO
+                /// ⚽ LOGO HERO BLINDADA CONTRA LENTIDÃO
                 Hero(
                   tag: 'logo', 
-                  child: SizedBox(
-                    height: logoSize, 
-                    width: logoSize,
-                    child: Image.asset(
-                      "assets/logo.png",
-                      fit: BoxFit.contain,
-                      cacheHeight: 400, 
-                      errorBuilder: (context, error, stackTrace) => 
-                        const Icon(Icons.sports_soccer, size: 140, color: primaryNeon),
+                  child: RepaintBoundary( // 🚀 MUDANÇA AQUI: Isola a pintura da logo
+                    child: SizedBox(
+                      height: logoSize, 
+                      width: logoSize,
+                      child: Image.asset(
+                        "assets/logo.png",
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) => 
+                          const Icon(Icons.sports_soccer, size: 140, color: primaryNeon),
+                      ),
                     ),
                   ),
                 ),
@@ -220,7 +167,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 
                 const SizedBox(height: 30),
 
-                /// EMAIL (Ação: Next)
+                /// EMAIL
                 CampoInput(
                   controller: _emailController,
                   label: "Seu e-mail",
@@ -231,7 +178,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 const SizedBox(height: 16),
 
-                /// SENHA (Ação: Done + Login Automático)
+                /// SENHA
                 CampoInput(
                   controller: _senhaController,
                   label: "Sua senha",

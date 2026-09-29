@@ -2,7 +2,7 @@ class UsuarioModel {
   final String uid;
   final String nome;
   final String email;
-  final String tipoPerfil; // 'goleiro' ou 'contratante'
+  final String tipoPerfil;
 
   UsuarioModel({
     required this.uid,
@@ -11,13 +11,13 @@ class UsuarioModel {
     required this.tipoPerfil,
   });
 
-  // Transforma o JSON do Firebase em um Objeto C# / Dart
   factory UsuarioModel.fromMap(Map<String, dynamic> map, String id) {
     return UsuarioModel(
       uid: id,
       nome: map['nome'] ?? '',
       email: map['email'] ?? '',
-      tipoPerfil: map['tipoPerfil'] ?? 'contratante', // Default por segurança
+      // 🟢 Normaliza para caixa baixa e evita falhas de rotas
+      tipoPerfil: (map['tipoPerfil'] ?? 'contratante').toString().toLowerCase().trim(),
     );
   }
 }

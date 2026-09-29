@@ -1,40 +1,42 @@
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart'; // 🟢 INJETADO AQUI
+import 'package:permission_handler/permission_handler.dart'; 
 import 'tabs_goleiro/aba_buscar_jogos.dart';
 import 'tabs_goleiro/aba_minhas_peladas.dart';
 import 'tabs_goleiro/aba_perfil_goleiro.dart';
 import 'tabs_goleiro/aba_carteira.dart';
 
+import '../widgets/custom_app_bar.dart';
+
 class HomeGoleiro extends StatefulWidget {
-  const HomeGoleiro({super.key});
+  final int indiceInicial; 
+
+  const HomeGoleiro({super.key, this.indiceInicial = 0}); 
 
   @override
-  State<HomeGoleiro> createState() => _HomeGoleiroState();
+  State <HomeGoleiro> createState() => _HomeGoleiroState();
 }
 
-class _HomeGoleiroState extends State<HomeGoleiro> {
-  int _abaAtual = 0;
+class _HomeGoleiroState extends State <HomeGoleiro> {
+  late int _abaAtual;
 
-  final List<Widget> _abas = [
+  final List _abas = [
     const AbaMinhasPeladas(), 
     const AbaBuscarJogos(),   
     const AbaCarteira(),      
     const AbaPerfilGoleiro(), 
   ];
 
-  // 🟢 MAGIA DAS PERMISSÕES: Roda assim que a tela nasce!
   @override
   void initState() {
     super.initState();
+    _abaAtual = widget.indiceInicial; 
     _solicitarPermissoesEssenciais();
   }
 
-  Future<void> _solicitarPermissoesEssenciais() async {
-    // Pede permissão para avisar o goleiro sobre novas convocações ou aprovações
+  Future _solicitarPermissoesEssenciais() async {
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
-    // Pede localização para o goleiro buscar jogos próximos a ele
     if (await Permission.locationWhenInUse.isDenied) {
       await Permission.locationWhenInUse.request();
     }
@@ -43,29 +45,7 @@ class _HomeGoleiroState extends State<HomeGoleiro> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // --- O TOPO PADRONIZADO ENTRA AQUI ---
-      appBar: AppBar(
-        // Como o seu tema usa 0xFF121212, vamos manter aqui para casar perfeito
-        backgroundColor: const Color(0xFF121212), 
-        elevation: 0,
-        centerTitle: true,
-        title: const Text(
-          "Defende Pra Mim",
-          style: TextStyle(
-            fontWeight: FontWeight.bold, 
-            color: Colors.white, 
-            fontSize: 18
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none, color: Colors.white),
-            onPressed: () {},
-          ),
-        ],
-      ),
-      // -------------------------------------
-
+      appBar: const CustomAppBar(),
       body: _abas[_abaAtual],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _abaAtual,
@@ -76,7 +56,8 @@ class _HomeGoleiroState extends State<HomeGoleiro> {
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.sports_soccer), 
+            icon: Icon(Icons.sports_soccer_outlined), 
+            activeIcon: Icon(Icons.sports_soccer),
             label: "Minhas Peladas",
           ),
           BottomNavigationBarItem(
@@ -84,11 +65,13 @@ class _HomeGoleiroState extends State<HomeGoleiro> {
             label: "Buscar",
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.account_balance_wallet), 
+            icon: Icon(Icons.account_balance_wallet_outlined), 
+            activeIcon: Icon(Icons.account_balance_wallet),
             label: "Carteira", 
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.person), 
+            icon: Icon(Icons.person_outline), 
+            activeIcon: Icon(Icons.person),
             label: "Perfil",
           ),
         ],

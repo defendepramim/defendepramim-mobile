@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+// 🟢 NÃO ESQUEÇA DE IMPORTAR O CARD QUE ACABAMOS DE MELHORAR!
+import 'package:defendepramim/ui/widgets/card_historico_goleiro.dart';
 
 class TelaHistoricoGoleiro extends StatefulWidget {
   const TelaHistoricoGoleiro({super.key});
@@ -27,7 +29,6 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
 
   @override
   Widget build(BuildContext context) {
-    // AQUI O SCAFFOLD É OBRIGATÓRIO PARA TER A SETA DE VOLTAR
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -35,7 +36,7 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context), // Volta para a aba anterior
+          onPressed: () => Navigator.pop(context), 
         ),
         title: const Text("Histórico de Ganhos", style: TextStyle(color: Colors.white)),
         actions: [
@@ -63,7 +64,8 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
           double totalGanhos = 0.0;
           for (var doc in docs) {
             final data = doc.data() as Map<String, dynamic>;
-            final valorRaw = data['valor'];
+            // 🟢 Pega o valor líquido do goleiro (com fallback seguro)
+            final valorRaw = data['valorPagoAoGoleiro'] ?? data['valorGoleiro'] ?? data['valor'];
             if (valorRaw is num) totalGanhos += valorRaw.toDouble();
             else if (valorRaw is String) totalGanhos += double.tryParse(valorRaw) ?? 0.0;
           }
@@ -71,7 +73,7 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
           return Column(
             children: [
               _buildResumoCard(totalGanhos, docs.length),
-              // Detalhamento e lista abaixo...
+              
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 child: Align(
@@ -86,8 +88,15 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
                       itemCount: docs.length,
                       itemBuilder: (context, index) {
                         final jogo = docs[index].data() as Map<String, dynamic>;
-                        final dt = (jogo['dataHora'] as Timestamp).toDate().toLocal();
-                        return _buildItemHistorico(jogo, dt);
+                        
+                        // 🟢 AGORA USAMOS O MESMO CARD PREMIUM AQUI TAMBÉM!
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: CardHistoricoGoleiro(
+                            jogo: jogo,
+                            agora: DateTime.now(),
+                          ),
+                        );
                       },
                     ),
               ),
@@ -113,8 +122,10 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
           const Text("TOTAL FATURADO NO PERÍODO", 
             style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          Text("R\$ ${total.toStringAsFixed(2)}", 
-            style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w900)),
+          Text(
+            "R\$ ${total.toStringAsFixed(2).replaceAll('.', ',')}", 
+            style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w900),
+          ),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -138,30 +149,6 @@ class _TelaHistoricoGoleiroState extends State<TelaHistoricoGoleiro> {
             ],
           )
         ],
-      ),
-    );
-  }
-
-  Widget _buildItemHistorico(Map<String, dynamic> jogo, DateTime dt) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1A),
-        borderRadius: BorderRadius.circular(15),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(10)),
-          child: const Icon(Icons.sports_soccer, color: Colors.white24),
-        ),
-        title: Text(jogo['local']?.toUpperCase() ?? 'ARENA', 
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-        subtitle: Text(DateFormat('dd/MM/yyyy - HH:mm').format(dt), 
-          style: const TextStyle(color: Colors.white38, fontSize: 11)),
-        trailing: Text("+ R\$ ${jogo['valor']}", 
-          style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold, fontSize: 15)),
       ),
     );
   }

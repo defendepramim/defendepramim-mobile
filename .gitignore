@@ -64,3 +64,4 @@ ios/Runner/GoogleService-Info.plist
 # Arquivo de variáveis secretas
 .env
 lib/core/chaves.dart
+env.json

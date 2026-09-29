@@ -14,6 +14,32 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
   final Color primaryColor = const Color(0xFF00E676);
   final Color surfaceColor = const Color(0xFF1E1E1E);
 
+  // 🟢 NOVA VARIÁVEL: Guarda o prazo do painel ADM (Padrão de segurança é 12)
+  int _horasPrazoPagamento = 12;
+
+  @override
+  void initState() {
+    super.initState();
+    _buscarRegrasAdmin();
+  }
+
+  // 🟢 BUSCA A REGRA DO ADM UMA SÓ VEZ AO ABRIR A TELA
+  Future<void> _buscarRegrasAdmin() async {
+    try {
+      final snap = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
+      // 🟢 Usando o nome exato do campo do painel
+      if (snap.exists && snap.data()?['horasPagamentoAuto'] != null) {
+        if (mounted) {
+          setState(() {
+            _horasPrazoPagamento = (snap.data()?['horasPagamentoAuto'] as num).toInt();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Erro ao buscar prazo de pagamento: $e");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // 🟢 AGORA USAMOS O PADRÃO DE ABAS DO GOLEIRO
@@ -71,12 +97,24 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
         // 1. EM DISPUTA (Urgência máxima)
         final contestados = documentos.where((doc) => doc['status'] == 'contestado').toList();
         
-        // 2. FINALIZAR E PAGAR (Já passou do horário de término)
+        // 2. FINALIZAR OU PAGAR (Sai da agenda assim que o status mudar para 'finalizado')
         final pendentesAcao = documentos.where((doc) {
-          if (doc['status'] != 'fechado') return false;
-          final dt = (doc['dataHora'] as Timestamp).toDate();
-          final fim = dt.add(Duration(minutes: doc['duracao'] ?? 60));
-          return agora.isAfter(fim) || agora.isAtSameMomentAs(fim);
+          final dados = doc.data() as Map<String, dynamic>;
+          final s = dados['status'];
+          
+          final dt = (dados['dataHora'] as Timestamp).toDate();
+          final fim = dt.add(Duration(minutes: dados['duracao'] ?? 60));
+          
+          final limitePagamento = fim.add(Duration(hours: _horasPrazoPagamento));
+
+          if (agora.isAfter(limitePagamento)) return false;
+
+          // Fica na agenda APENAS se terminou e precisa de pagamento manual (fechado)
+          if (s == 'fechado' && (agora.isAfter(fim) || agora.isAtSameMomentAs(fim))) {
+            return true;
+          }
+          
+          return false; // Se foi finalizado (pago), vaza da agenda!
         }).toList();
 
         // 3. EM ANDAMENTO (Bola rolando AGORA!)
@@ -113,7 +151,8 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
             ],
 
             if (pendentesAcao.isNotEmpty) ...[
-              _buildHeader(Icons.priority_high_rounded, "FINALIZAR E PAGAR", Colors.orangeAccent),
+              // 🟢 Título atualizado para deixar claro o que falta fazer
+              _buildHeader(Icons.priority_high_rounded, "FINALIZAR / AVALIAR", Colors.orangeAccent),
               ...pendentesAcao.map((doc) => _buildCard(doc, primaryColor)),
             ],
 
@@ -142,7 +181,7 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
       stream: FirebaseFirestore.instance
           .collection('jogos')
           .where('idContratante', isEqualTo: uid)
-          .orderBy('dataHora', descending: true) // 🟢 Histórico desce do mais recente pro mais antigo!
+          .orderBy('dataHora', descending: true) 
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return const Center(child: Text("Erro ao carregar jogos", style: TextStyle(color: Colors.white)));
@@ -152,13 +191,25 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
         final documentos = snapshot.data!.docs;
 
         final historico = documentos.where((doc) {
-          final status = doc['status'];
-          final dt = (doc['dataHora'] as Timestamp).toDate();
+          // 🛑 IGNORA AS CÓPIAS DE RECIBO DO GOLEIRO (Evita duplicatas no histórico do contratante)
+          if (doc.id.startsWith('cancelado_')) return false;
 
-          // Já finalizados ou cancelados oficialmente vêm pra cá
-          if (['finalizado', 'cancelado'].contains(status)) return true;
+          final dados = doc.data() as Map<String, dynamic>;
+          final status = dados['status'];
+          final dt = (dados['dataHora'] as Timestamp).toDate();
+          final fim = dt.add(Duration(minutes: dados['duracao'] ?? 60));
           
-          // 🟢 CORREÇÃO DO BURACO NEGRO: Se está aberto mas o horário do jogo já passou, ele expirou! Vem pro histórico.
+          final limitePagamento = fim.add(Duration(hours: _horasPrazoPagamento));
+
+          // Cancelados, Expirados ou Pagos (Finalizados) vão DIRETO pro histórico!
+          if (status == 'cancelado' || status == 'expirado' || status == 'finalizado') return true;
+          
+          // Se o jogo está fechado (sem pagar) e passou do prazo, vai pro histórico pro robô pegar
+          if (agora.isAfter(limitePagamento) && status == 'fechado') {
+             return true;
+          }
+          
+          // Buraco negro (aberto no passado e ninguém aceitou)
           if (status == 'aberto' && agora.isAfter(dt)) return true;
 
           return false;
@@ -171,17 +222,10 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
           children: [
             const SizedBox(height: 10),
             _buildHeader(Icons.history_rounded, "HISTÓRICO DE JOGOS", Colors.white54),
-            ...historico.map((doc) {
-              // Hack Visual: Se caiu no buraco negro, passamos o status como cancelado pro Card entender visualmente!
+              ...historico.map((doc) {
               Map<String, dynamic> dadosFormatados = Map.from(doc.data() as Map<String, dynamic>);
               dadosFormatados['id'] = doc.id;
               
-              final dt = (dadosFormatados['dataHora'] as Timestamp).toDate();
-              if (dadosFormatados['status'] == 'aberto' && agora.isAfter(dt)) {
-                 dadosFormatados['status'] = 'expirado';
-                 dadosFormatados['motivoCancelamento'] = 'O horário passou e nenhum goleiro aceitou.';
-              }
-
               return CardJogoContratante(jogo: dadosFormatados, cor: primaryColor);
             }),
             const SizedBox(height: 50),
@@ -209,14 +253,16 @@ class _AbaMeusJogosState extends State<AbaMeusJogos> {
   }
 
   Widget _buildCard(QueryDocumentSnapshot doc, Color cor) {
-    final dados = doc.data() as Map<String, dynamic>;
+    // 🟢 CORREÇÃO: Usamos Map.from() para destrancar o mapa do Firebase antes de adicionar o ID
+    final dados = Map<String, dynamic>.from(doc.data() as Map<String, dynamic>);
     dados['id'] = doc.id;
     return CardJogoContratante(jogo: dados, cor: cor);
   }
 
   Widget _buildHeader(IconData icon, String label, Color cor) {
     return Padding(
-      padding: const EdgeInsets.only(top: 15, bottom: 12),
+      // 🚀 AQUI ESTÁ A MÁGICA: Mais espaço em cima (24) e um pouquinho mais embaixo (16)
+      padding: const EdgeInsets.only(top: 24, bottom: 16),
       child: Row(
         children: [
           Icon(icon, color: cor, size: 14),
