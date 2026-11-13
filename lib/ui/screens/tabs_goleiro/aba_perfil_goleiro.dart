@@ -689,9 +689,19 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
           final atuadas = (dados['atuadas'] as num?)?.toInt() ?? 0;
           final faltas = (dados['faltas'] as num?)?.toInt() ?? 0;
 
-          double soma = (dados['somaAvaliacoes'] as num?)?.toDouble() ?? 0.0;
-          int total = (dados['totalAvaliacoes'] as num?)?.toInt() ?? 0;
-          double media = total > 0 ? (soma / total) : 0.0;
+          // Nota oficial: notaMedia (servidor) > somaNotasAvaliacoes > legado somaAvaliacoes
+          final int total = (dados['totalAvaliacoes'] as num?)?.toInt() ?? 0;
+          double media = (dados['notaMedia'] as num?)?.toDouble() ?? 0.0;
+          if (media <= 0 && total > 0) {
+            final soma = (dados['somaNotasAvaliacoes'] as num?)?.toDouble()
+                ?? (dados['somaAvaliacoes'] as num?)?.toDouble()
+                ?? 0.0;
+            media = soma / total;
+          }
+
+          final String categoriaRaw = (dados['categoria'] ?? dados['nivel'] ?? 'livre').toString().toLowerCase();
+          final String nivelLabel = _labelNivel(categoriaRaw);
+          final Color nivelCor = _corNivel(categoriaRaw);
 
           final chavePix = dados['chavePix']?.toString().trim() ?? "";
           final tipoPix = dados['tipoPix']?.toString() ?? "";
@@ -731,7 +741,49 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 6),
+                            // Badge de nível + info
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: nivelCor.withAlpha(28),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(color: nivelCor.withAlpha(120)),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(_iconeNivel(categoriaRaw), color: nivelCor, size: 14),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        nivelLabel.toUpperCase(),
+                                        style: TextStyle(
+                                          color: nivelCor,
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 11,
+                                          letterSpacing: 0.6,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                GestureDetector(
+                                  onTap: () => _mostrarInfoNiveis(context, categoriaRaw, atuadas, media, total),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withAlpha(12),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.info_outline_rounded, color: Colors.white54, size: 16),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
                             Row(
                               children: [
                                 const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
@@ -815,6 +867,219 @@ class _AbaPerfilGoleiroState extends State<AbaPerfilGoleiro> {
     String limpo = telefone.replaceAll(RegExp(r'[^0-9]'), '');
     if (limpo.length < 10) return telefone.isNotEmpty ? telefone : "---";
     return "(${limpo.substring(0, 2)}) 9****-${limpo.substring(limpo.length - 4)}";
+  }
+
+  String _labelNivel(String raw) {
+    if (raw.contains('elite') || raw.contains('pared')) return 'Elite';
+    if (raw.contains('exp') || raw.contains('inter') || raw.contains('médio') || raw.contains('medio')) {
+      return 'Experiente';
+    }
+    return 'Livre';
+  }
+
+  Color _corNivel(String raw) {
+    if (raw.contains('elite') || raw.contains('pared')) return const Color(0xFFFFD700); // ouro
+    if (raw.contains('exp') || raw.contains('inter') || raw.contains('médio') || raw.contains('medio')) {
+      return const Color(0xFF42A5F5); // azul
+    }
+    return const Color(0xFF00E676); // verde livre
+  }
+
+  IconData _iconeNivel(String raw) {
+    if (raw.contains('elite') || raw.contains('pared')) return Icons.workspace_premium_rounded;
+    if (raw.contains('exp') || raw.contains('inter') || raw.contains('médio') || raw.contains('medio')) {
+      return Icons.shield_rounded;
+    }
+    return Icons.sports_soccer_rounded;
+  }
+
+  /// Modal com requisitos dos níveis (lidos de configuracoes/global).
+  Future<void> _mostrarInfoNiveis(
+    BuildContext context,
+    String categoriaAtual,
+    int atuadas,
+    double media,
+    int totalAvaliacoes,
+  ) async {
+    // Defaults alinhados com o backend
+    double reqEliteNota = 4.5;
+    int reqElitePartidas = 15;
+    double reqExpNota = 4.2;
+    int reqExpPartidas = 5;
+
+    try {
+      final snap = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
+      if (snap.exists) {
+        final c = snap.data()!;
+        reqEliteNota = (c['reqEliteNota'] as num?)?.toDouble() ?? reqEliteNota;
+        reqElitePartidas = (c['reqElitePartidas'] as num?)?.toInt() ?? reqElitePartidas;
+        reqExpNota = (c['reqExperienteNota'] as num?)?.toDouble() ?? reqExpNota;
+        reqExpPartidas = (c['reqExperientePartidas'] as num?)?.toInt() ?? reqExpPartidas;
+      }
+    } catch (_) {}
+
+    if (!context.mounted) return;
+
+    final atual = _labelNivel(categoriaAtual);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          decoration: const BoxDecoration(
+            color: Color(0xFF161616),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(4)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Icon(Icons.emoji_events_rounded, color: Color(0xFFFFD700), size: 22),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Níveis de Goleiro',
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _corNivel(categoriaAtual).withAlpha(30),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _corNivel(categoriaAtual).withAlpha(100)),
+                    ),
+                    child: Text(
+                      'Você: $atual',
+                      style: TextStyle(
+                        color: _corNivel(categoriaAtual),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                totalAvaliacoes > 0
+                    ? 'Seu desempenho: ${media.toStringAsFixed(1)}★ · $atuadas partidas · $totalAvaliacoes avaliações'
+                    : 'Seu desempenho: ainda sem avaliações · $atuadas partidas',
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+              const SizedBox(height: 18),
+              _cardNivelInfo(
+                titulo: 'Livre',
+                cor: const Color(0xFF00E676),
+                icone: Icons.sports_soccer_rounded,
+                descricao: 'Ponto de partida. Pode aceitar peladas de nível Livre.',
+                requisito: 'Sem requisito mínimo',
+                ativo: atual == 'Livre',
+              ),
+              const SizedBox(height: 10),
+              _cardNivelInfo(
+                titulo: 'Experiente',
+                cor: const Color(0xFF42A5F5),
+                icone: Icons.shield_rounded,
+                descricao: 'Acesso a peladas de nível Experiente e Livre.',
+                requisito: '≥ $reqExpPartidas partidas e nota ≥ ${reqExpNota.toStringAsFixed(1)}',
+                ativo: atual == 'Experiente',
+              ),
+              const SizedBox(height: 10),
+              _cardNivelInfo(
+                titulo: 'Elite',
+                cor: const Color(0xFFFFD700),
+                icone: Icons.workspace_premium_rounded,
+                descricao: 'Topo da cadeia. Pode aceitar qualquer convocação.',
+                requisito: '≥ $reqElitePartidas partidas e nota ≥ ${reqEliteNota.toStringAsFixed(1)}',
+                ativo: atual == 'Elite',
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'O nível sobe automaticamente quando o contratante te avalia após a partida. Requisitos podem mudar no painel admin.',
+                style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.35),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _cardNivelInfo({
+    required String titulo,
+    required Color cor,
+    required IconData icone,
+    required String descricao,
+    required String requisito,
+    required bool ativo,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: ativo ? cor.withAlpha(22) : Colors.white.withAlpha(6),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ativo ? cor.withAlpha(140) : Colors.white12, width: ativo ? 1.4 : 1),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: cor.withAlpha(28), borderRadius: BorderRadius.circular(10)),
+            child: Icon(icone, color: cor, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      titulo,
+                      style: TextStyle(color: cor, fontWeight: FontWeight.w900, fontSize: 14),
+                    ),
+                    if (ativo) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: cor.withAlpha(40),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'ATUAL',
+                          style: TextStyle(color: cor, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(descricao, style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.3)),
+                const SizedBox(height: 4),
+                Text(requisito, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   String _mascararChavePix(String chave) {

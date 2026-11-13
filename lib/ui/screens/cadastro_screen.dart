@@ -8,13 +8,13 @@ class TelaCadastro extends StatefulWidget {
   const TelaCadastro({super.key, this.googleUser});
 
   @override
-  State<TelaCadastro> createState() => _TelaCadastroState();
+  State< TelaCadastro > createState() => _TelaCadastroState();
 }
 
-class _TelaCadastroState extends State<TelaCadastro> {
-  final _formKeyEtapa1 = GlobalKey<FormState>();
-  final _formKeyEtapa2 = GlobalKey<FormState>();
-  final _formKeyGoogle = GlobalKey<FormState>(); 
+class _TelaCadastroState extends State< TelaCadastro > {
+  final _formKeyEtapa1 = GlobalKey< FormState >();
+  final _formKeyEtapa2 = GlobalKey< FormState >();
+  final _formKeyGoogle = GlobalKey< FormState >(); 
 
   final _nomeController = TextEditingController();
   final _cpfController = TextEditingController();
@@ -201,7 +201,7 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
   }
 
   // 🟢 ETAPA 2: A CONTA JÁ FOI CRIADA NO PASSO 1, SÓ SALVAMOS NO BANCO
-  Future<void> _finalizarCadastro() async {
+  Future< void > _finalizarCadastro() async {
     _setErro(null);
     
     if (_isGoogleMode) {
@@ -223,12 +223,12 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
     setState(() => _carregando = true);
 
     try {
-      // Como o cara já passou da Etapa 1, a conta já existe no Auth! Só pegamos o ID.
       User? currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser == null) throw Exception("Sessão expirada. Volte e tente novamente.");
 
       String userUid = currentUser.uid;
 
+      // Perfil vital apenas. Saldo/multas vivem em carteiras/{uid} (criada pelo trigger Auth).
       await FirebaseFirestore.instance.collection('usuarios').doc(userUid).set({
         'uid': userUid,
         'nome': _nomeController.text.trim(),
@@ -237,30 +237,29 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
         'cpf': _cpfController.text.replaceAll(RegExp(r'[^0-9]'), ''),
         'telefone': _telefoneController.text.trim(),
         'tipoPerfil': _tipoUsuario,
-        'fotoUrl': _usuarioLogado?.photoURL ?? "", 
+        'fotoUrl': _usuarioLogado?.photoURL ?? "",
         'provedorAutenticacao': _isGoogleMode ? 'google' : 'email',
-        'saldo': 0.0,
-        'multasPendentes': 0.0,
         'qtdDesistencias': 0,
         'reputacao': 5.0,
         'jogosRealizados': 0,
         'ativo': true,
         'criadoEm': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
 
       if (mounted) {
           Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
       }
     } catch (e) {
       debugPrint("🚨 ERRO NO FIRESTORE: $e");
-      _setErro("Erro real: $e");
+      // 🚀 MUDANÇA: Substituído o erro de sistema ($e) por uma mensagem civilizada
+      _setErro("Erro ao finalizar o perfil. Verifique sua conexão e tente novamente.");
     } finally {
       if (mounted) setState(() => _carregando = false);
     }
   }
 
   // 🟢 SE ELE DESISTIR NA ETAPA 2, APAGAMOS A CONTA SILENCIOSA
-  Future<void> _acaoVoltar() async {
+  Future< void > _acaoVoltar() async {
     if (_isGoogleMode) {
       await FirebaseAuth.instance.signOut();
       if (mounted) {
@@ -269,7 +268,6 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
     } else {
       if (_paginaAtual == 1) {
         try {
-          // Apaga o e-mail criado caso ele mude de ideia e queira voltar
           await FirebaseAuth.instance.currentUser?.delete();
         } catch (_) {} 
         setState(() => _paginaAtual = 0);
@@ -463,7 +461,6 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
 
             const SizedBox(height: 16),
             
-            // 🟢 A MÁGICA: CRIA A CONTA AQUI PARA VALIDAR SE O EMAIL EXISTE COM 100% DE CERTEZA
             _botaoAcao(_carregando ? "VERIFICANDO..." : "PRÓXIMO PASSO", color, _carregando ? null : () async {
               _setErro(null);
               setState(() => _erroEmailAsync = null);
@@ -473,18 +470,15 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
                 setState(() => _carregando = true);
                 
                 try {
-                  // O Firebase vai barrar aqui se o email já existir!
                   await FirebaseAuth.instance.createUserWithEmailAndPassword(
                     email: _emailController.text.trim().toLowerCase(),
                     password: _senhaController.text.trim(),
                   );
-                  // Passou ileso? Então o e-mail é válido e a conta Auth está criada. Avança!
                   setState(() => _paginaAtual = 1); 
                   
                 } on FirebaseAuthException catch (e) {
                   if (e.code == 'email-already-in-use') {
                     try {
-                      // Se já existe no Auth mas não no Firestore, loga e avança para a Etapa 2
                       await FirebaseAuth.instance.signInWithEmailAndPassword(
                         email: _emailController.text.trim().toLowerCase(),
                         password: _senhaController.text.trim(),
@@ -498,7 +492,8 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
                     _setErro(e.message);
                   }
                 } catch (e) {
-                  _setErro("Erro interno: $e");
+                  // 🚀 MUDANÇA: Erro não exibe mais o $e para o usuário final
+                  _setErro("Erro interno ao processar o cadastro. Tente novamente.");
                 } finally {
                   if (mounted) setState(() => _carregando = false);
                 }
@@ -572,7 +567,6 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
     TextCapitalization textCapitalization = TextCapitalization.none,
     FocusNode? focusNode, 
     String? forceErrorText, 
-    // 🟢 1. Adicionamos o parâmetro aqui com o padrão de interação
     AutovalidateMode autovalidateMode = AutovalidateMode.onUserInteraction, 
   }) {
     return Padding(
@@ -588,7 +582,6 @@ Ao criar sua conta, você declara ser maior de 18 anos, ter lido, compreendido e
         inputFormatters: mask != null ? [mask] : [],
         validator: validator,
         textCapitalization: textCapitalization,
-        // 🟢 2. Ativamos a validação em tempo real no TextFormField
         autovalidateMode: autovalidateMode, 
         style: const TextStyle(color: Colors.white, fontSize: 14),
         decoration: InputDecoration(

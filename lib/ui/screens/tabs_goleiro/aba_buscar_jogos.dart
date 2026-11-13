@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart'; 
-import 'package:url_launcher/url_launcher.dart'; 
-import 'package:defendepramim/services/notificacao_service.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AbaBuscarJogos extends StatefulWidget {
   const AbaBuscarJogos({super.key});
@@ -75,20 +75,43 @@ class _AbaBuscarJogosState extends State<AbaBuscarJogos> {
       final doc = await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
       if (doc.exists && mounted) {
         final d = doc.data()!;
-        
-        final int totalPartidas = (d['atuadas'] as num?)?.toInt() ?? (d['jogosRealizados'] as num?)?.toInt() ?? 0;
-        
-        final double somaAvaliacoes = (d['somaAvaliacoes'] as num?)?.toDouble() ?? 0.0;
+
+        final int totalPartidas =
+            (d['atuadas'] as num?)?.toInt() ?? (d['jogosRealizados'] as num?)?.toInt() ?? 0;
+
+        // Campos oficiais do backend (recalcularNivelGoleiro) + legado
+        final double somaAvaliacoes = (d['somaNotasAvaliacoes'] as num?)?.toDouble() ??
+            (d['somaAvaliacoes'] as num?)?.toDouble() ??
+            0.0;
         final int totalAvaliacoes = (d['totalAvaliacoes'] as num?)?.toInt() ?? 0;
-        final double notaMedia = totalAvaliacoes > 0 ? (somaAvaliacoes / totalAvaliacoes) : 0.0;
-        
+        final double notaMediaGravada = (d['notaMedia'] as num?)?.toDouble() ?? 0.0;
+        final double notaMedia = totalAvaliacoes > 0
+            ? (somaAvaliacoes / totalAvaliacoes)
+            : notaMediaGravada;
+
+        // Rank por métricas
+        int rankMetricas = 0;
         if (totalPartidas >= _reqElitePartidas && notaMedia >= _reqEliteNota) {
-          _rankGoleiroCalculado = 2; // Elite
+          rankMetricas = 2;
         } else if (totalPartidas >= _reqExperientePartidas && notaMedia >= _reqExperienteNota) {
-          _rankGoleiroCalculado = 1; // Experiente
-        } else {
-          _rankGoleiroCalculado = 0; // Livre
+          rankMetricas = 1;
         }
+
+        // Rank oficial gravado em usuarios.categoria (fonte do level-up)
+        final String categoria = (d['categoria'] ?? 'livre').toString().toLowerCase();
+        int rankCategoria = 0;
+        if (categoria.contains('elite') || categoria.contains('pared')) {
+          rankCategoria = 2;
+        } else if (categoria.contains('exp') ||
+            categoria.contains('inter') ||
+            categoria.contains('médio') ||
+            categoria.contains('medio')) {
+          rankCategoria = 1;
+        }
+
+        // Elegível pelo melhor dos dois (igual ao servidor)
+        _rankGoleiroCalculado =
+            rankMetricas > rankCategoria ? rankMetricas : rankCategoria;
 
         setState(() {
           _carregandoPerfil = false;
@@ -228,6 +251,7 @@ Future<void> _pegarLocalizacaoGoleiro() async {
     );
   }
 
+  /// Aceite só no servidor (Callable) — evita race de dois goleiros.
   Future<void> _processarAceite(BuildContext context, String idJogo) async {
     final String? uidGoleiro = FirebaseAuth.instance.currentUser?.uid;
     if (uidGoleiro == null) return;
@@ -236,100 +260,44 @@ Future<void> _pegarLocalizacaoGoleiro() async {
     setState(() => _jogoProcessando = idJogo);
 
     try {
+      // Pré-check de nível na UI (feedback rápido); servidor valida de novo
       final snapNovo = await FirebaseFirestore.instance.collection('jogos').doc(idJogo).get();
+      if (!snapNovo.exists) {
+        throw "Jogo não encontrado.";
+      }
       final dadosNovo = snapNovo.data() as Map<String, dynamic>;
-      
-      final String nivelExigido = (dadosNovo['nivelGoleiro'] ?? dadosNovo['nivel'] ?? 'Livre').toString();
+      final String nivelExigido =
+          (dadosNovo['nivelGoleiro'] ?? dadosNovo['nivel'] ?? 'Livre').toString();
       if (!_isGoleiroElegivel(nivelExigido)) {
         throw "Você não atende aos requisitos de partidas ou nota para este nível de partida.";
       }
 
-      final String idContratante = dadosNovo['idContratante'] ?? ''; 
-      
-      final DateTime inicioNovo = (dadosNovo['dataHora'] as Timestamp).toDate();
-      final int duracaoMinNovo = (dadosNovo['duracao'] ?? 60).toInt();
-      final DateTime fimNovo = inicioNovo.add(Duration(minutes: duracaoMinNovo));
-      final String localNovo = (dadosNovo['local'] ?? '').toString().trim();
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('aceitarConvocacao');
 
-      final DateTime inicioDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 0, 0, 0);
-      final DateTime fimDoDia = DateTime(inicioNovo.year, inicioNovo.month, inicioNovo.day, 23, 59, 59);
-
-      final conflitosQuery = await FirebaseFirestore.instance
-          .collection('jogos')
-          .where('idGoleiro', isEqualTo: uidGoleiro)
-          .where('status', whereIn: ['fechado', 'finalizado'])
-          .where('dataHora', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDoDia))
-          .where('dataHora', isLessThanOrEqualTo: Timestamp.fromDate(fimDoDia))
-          .get();
-
-      for (var doc in conflitosQuery.docs) {
-        if (doc.id == idJogo) continue;
-        final dadosEx = doc.data();
-        final DateTime inicioEx = (dadosEx['dataHora'] as Timestamp).toDate();
-        final int duracaoEx = (dadosEx['duracao'] ?? 60).toInt();
-        final String localEx = (dadosEx['local'] ?? '').toString().trim();
-
-        DateTime fimExCalculado = inicioEx.add(Duration(minutes: duracaoEx));
-        bool precisaDeslocamento = localEx.toLowerCase() != localNovo.toLowerCase();
-
-        if (precisaDeslocamento) fimExCalculado = fimExCalculado.add(const Duration(minutes: 30));
-
-        if (inicioNovo.isBefore(fimExCalculado) && fimNovo.isAfter(inicioEx)) {
-          throw precisaDeslocamento
-              ? "CONFLITO: Você já tem jogo em '$localEx'. Precisa de 30min para deslocamento."
-              : "CONFLITO: Você já tem um jogo neste horário em '$localEx'.";
-        }
-      }
-
-      String nomeGoleiroParaAviso = "Goleiro"; 
-      
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        DocumentReference userRef = FirebaseFirestore.instance.collection('usuarios').doc(uidGoleiro);
-        DocumentSnapshot userSnap = await transaction.get(userRef);
-        
-        final dadosGoleiro = userSnap.data() as Map<String, dynamic>?;
-        nomeGoleiroParaAviso = dadosGoleiro?['nome'] ?? "Goleiro";
-
-        DocumentReference jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
-        
-        // 🟢 PROTEÇÃO DE TRANSAÇÃO: Verifica se o jogo ainda está aberto ANTES de sobrescrever
-        DocumentSnapshot jogoSnap = await transaction.get(jogoRef);
-        if (jogoSnap.get('status') != 'aberto') {
-          throw Exception("Ops! Outro goleiro foi mais rápido e já aceitou essa partida.");
-        }
-
-        transaction.update(jogoRef, {
-          'status': 'fechado',
-          'idGoleiro': uidGoleiro,
-          'nomeGoleiro': nomeGoleiroParaAviso, 
-          'aceitoEm': FieldValue.serverTimestamp(),
-        });
-      });
-
-      if (idContratante.isNotEmpty) {
-        final String diaMes = "${inicioNovo.day.toString().padLeft(2, '0')}/${inicioNovo.month.toString().padLeft(2, '0')}";
-        final String horaStr = "${inicioNovo.hour.toString().padLeft(2, '0')}:${inicioNovo.minute.toString().padLeft(2, '0')}";
-
-        await NotificacaoService().enviarNotificacao(
-          idUsuarioDestino: idContratante,
-          titulo: "Goleiro Confirmado! 🧤",
-          mensagem: "O(a) $nomeGoleiroParaAviso aceitou a convocação em ${localNovo.split('(')[0].trim()} dia $diaMes às $horaStr.",
-          tipo: 'aceitou_jogo',
-        );
-      }
+      await callable.call({'idJogo': idJogo});
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(backgroundColor: Colors.green, content: Text("🧤 Jogo aceito!")),
         );
       }
-
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint("❌ ERRO ACEITAR (Functions): $e");
+      if (context.mounted) {
+        final msgFinal = e.message ?? "Não foi possível aceitar a convocação.";
+        _showAlertaCustom(
+          context,
+          titulo: msgFinal.contains("CONFLITO") ? "Agenda Cheia" : "Ops!",
+          mensagem: msgFinal,
+          icone: msgFinal.contains("CONFLITO") ? Icons.event_busy : Icons.error_outline,
+          corDestaque: msgFinal.contains("CONFLITO") ? Colors.orangeAccent : primaryColor,
+        );
+      }
     } catch (e) {
       debugPrint("❌ ERRO NO CATCH: $e");
-      
       if (context.mounted) {
-        String msgFinal = e.toString().replaceAll("Exception: ", "");
-        
+        final msgFinal = e.toString().replaceAll("Exception: ", "");
         _showAlertaCustom(
           context,
           titulo: msgFinal.contains("CONFLITO") ? "Agenda Cheia" : "Ops!",

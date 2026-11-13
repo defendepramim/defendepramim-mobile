@@ -13,13 +13,14 @@ class HomeGoleiro extends StatefulWidget {
   const HomeGoleiro({super.key, this.indiceInicial = 0}); 
 
   @override
-  State <HomeGoleiro> createState() => _HomeGoleiroState();
+  State< HomeGoleiro > createState() => _HomeGoleiroState();
 }
 
-class _HomeGoleiroState extends State <HomeGoleiro> {
+// 🟢 TRUQUE DO ESPAÇO APLICADO
+class _HomeGoleiroState extends State< HomeGoleiro > {
   late int _abaAtual;
 
-  final List _abas = [
+  final List< Widget > _abas = [
     const AbaMinhasPeladas(), 
     const AbaBuscarJogos(),   
     const AbaCarteira(),      
@@ -33,7 +34,7 @@ class _HomeGoleiroState extends State <HomeGoleiro> {
     _solicitarPermissoesEssenciais();
   }
 
-  Future _solicitarPermissoesEssenciais() async {
+  Future< void > _solicitarPermissoesEssenciais() async {
     if (await Permission.notification.isDenied) {
       await Permission.notification.request();
     }
@@ -46,7 +47,10 @@ class _HomeGoleiroState extends State <HomeGoleiro> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: const CustomAppBar(),
-      body: _abas[_abaAtual],
+      body: IndexedStack(
+        index: _abaAtual,
+        children: _abas,
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _abaAtual,
         onTap: (index) => setState(() => _abaAtual = index),

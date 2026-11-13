@@ -20,27 +20,47 @@ class MapaSeletorPage extends StatefulWidget {
 
 class _MapaSeletorPageState extends State<MapaSeletorPage> {
   GoogleMapController? _mapController;
-  
-  LatLng _posicaoAtual = const LatLng(-30.0346, -51.2177); 
-  String _ruaEletro = "Buscando endereço...";
-  bool _carregandoLocalizacao = true;
-  String _nomeLocalEletro = ""; 
-  bool _movendoMapa = false; 
-  Set<Marker> _pinosQuadras = {}; 
 
-  // 🚀 CACHE DE ÍCONES: Evita regerar o Canvas de quadras já desenhadas!
-  final Map<String, BitmapDescriptor> _iconeCache = {};
-
+  LatLng _posicaoAtual = const LatLng(-30.0346, -51.2177);
   bool _veioDaBusca = false;
+  Set<Marker> _pinosQuadras = {};
+
+  /// Metadados das quadras parceiras (nome, endereço, lat, lng)
+  final Map<String, Map<String, dynamic>> _quadrasMeta = {};
+
+  /// Ícone gota partilhado (sem texto no bitmap → leve)
+  BitmapDescriptor? _iconeQuadraParceira;
+
+  /// Raio para considerar "mesma zona" (metros)
+  static const double _raioVizinhaMetros = 100;
+
+  // ---- Notifiers: atualizam UI sem rebuild do GoogleMap ----
+  final ValueNotifier<List<dynamic>> _previsoesVN = ValueNotifier(const []);
+  final ValueNotifier<bool> _temTextoBuscaVN = ValueNotifier(false);
+  final ValueNotifier<bool> _movendoVN = ValueNotifier(false);
+  final ValueNotifier<bool> _carregandoGpsVN = ValueNotifier(true);
+  final ValueNotifier<String> _ruaVN = ValueNotifier('Buscando endereço...');
+  final ValueNotifier<String> _nomeLocalVN = ValueNotifier('');
+  /// Chip flutuante quando toca num pin parceiro
+  final ValueNotifier<String?> _chipQuadraVN = ValueNotifier(null);
 
   final TextEditingController _cBusca = TextEditingController();
   String _sessionToken = const Uuid().v4();
-  List<dynamic> _previsoesBusca = [];
 
   final String _googleApiKey = ChavesSecretas.googleApiKey;
-  final String _mapStyle = '''[{"elementType": "geometry", "stylers": [{"color": "#212121"}]},{"elementType": "labels.icon", "stylers": [{"visibility": "off"}]},{"featureType": "road", "elementType": "geometry.fill", "stylers": [{"color": "#2c2c2c"}]},{"featureType": "water", "elementType": "geometry", "stylers": [{"color": "#000000"}]}]''';
+  final String _mapStyle =
+      '''[{"elementType": "geometry", "stylers": [{"color": "#212121"}]},{"elementType": "labels.icon", "stylers": [{"visibility": "off"}]},{"featureType": "road", "elementType": "geometry.fill", "stylers": [{"color": "#2c2c2c"}]},{"featureType": "water", "elementType": "geometry", "stylers": [{"color": "#000000"}]}]''';
 
-  Timer? _debounceTimer; 
+  Timer? _debounceTimer;
+  Timer? _searchDebounce;
+  int _searchSeq = 0;
+  bool _iconeCarregado = false;
+
+  // Getters legados usados noutros métodos
+  String get _ruaEletro => _ruaVN.value;
+  String get _nomeLocalEletro => _nomeLocalVN.value;
+  bool get _carregandoLocalizacao => _carregandoGpsVN.value;
+  bool get _movendoMapa => _movendoVN.value;
 
   @override
   void initState() {
@@ -52,10 +72,16 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
   void dispose() {
     _cBusca.dispose();
     _debounceTimer?.cancel();
+    _searchDebounce?.cancel();
+    _previsoesVN.dispose();
+    _temTextoBuscaVN.dispose();
+    _movendoVN.dispose();
+    _carregandoGpsVN.dispose();
+    _ruaVN.dispose();
+    _nomeLocalVN.dispose();
+    _chipQuadraVN.dispose();
     super.dispose();
   }
-
-  bool _iconeCarregado = false;
 
   @override
   void didChangeDependencies() {
@@ -66,185 +92,420 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
     }
   }
 
-  // 🟢 GERADOR DE ÍCONE COM CACHE
-  Future<BitmapDescriptor> _gerarIconeComNome(String nomeQuadra) async {
-    if (_iconeCache.containsKey(nomeQuadra)) {
-      return _iconeCache[nomeQuadra]!;
-    }
+  /// Pin B — badge flutuante (estilo Uber/Airbnb):
+  /// círculo escuro + anel verde + ícone campo + pontinha em baixo.
+  Future<BitmapDescriptor> _gerarIconeQuadraParceira() async {
+    if (_iconeQuadraParceira != null) return _iconeQuadraParceira!;
 
     try {
-      final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
-      final Canvas canvas = Canvas(pictureRecorder);
+      // Canvas compacto; âncora na ponta (0.5, 1.0)
+      const double w = 56;
+      const double h = 66;
+      const double cx = w / 2;
+      const double r = 18; // raio do badge
+      const double cy = 20; // centro do círculo (deixar espaço para sombra/ponta)
+      const double tipY = h - 2;
+      const double tipHalf = 7;
 
-      TextPainter textPainter = TextPainter(
-        textDirection: TextDirection.ltr, 
-        textAlign: TextAlign.center
-      );
-      textPainter.text = TextSpan(
-        text: nomeQuadra,
-        style: const TextStyle(
-          fontSize: 15,
-          color: Color(0xFF00E676),
-          fontWeight: FontWeight.w900,
-        ),
-      );
-      textPainter.layout();
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
 
-      TextPainter iconPainter = TextPainter(textDirection: TextDirection.ltr);
+      // --- Sombra do conjunto ---
+      final sombra = Paint()
+        ..color = const Color(0x55000000)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+      canvas.drawCircle(const Offset(cx + 0.5, cy + 1.5), r, sombra);
+
+      // --- Ponta pequena (triângulo) sob o círculo ---
+      final ponta = Path()
+        ..moveTo(cx - tipHalf, cy + r * 0.55)
+        ..lineTo(cx, tipY)
+        ..lineTo(cx + tipHalf, cy + r * 0.55)
+        ..close();
+      canvas.drawPath(ponta, Paint()..color = const Color(0xFF00E676));
+
+      // --- Disco escuro (miolo) ---
+      canvas.drawCircle(
+        const Offset(cx, cy),
+        r,
+        Paint()..color = const Color(0xFF141414),
+      );
+
+      // --- Anel verde ---
+      canvas.drawCircle(
+        const Offset(cx, cy),
+        r - 1.2,
+        Paint()
+          ..color = const Color(0xFF00E676)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.8,
+      );
+
+      // --- Ícone do campo centrado ---
+      final iconPainter = TextPainter(textDirection: TextDirection.ltr);
       iconPainter.text = TextSpan(
         text: String.fromCharCode(MapaIcons.soccer_field_svgrepo_com__2_.codePoint),
         style: TextStyle(
-          fontSize: 65,
+          fontSize: 20,
           fontFamily: MapaIcons.soccer_field_svgrepo_com__2_.fontFamily,
           color: const Color(0xFF00E676),
         ),
       );
       iconPainter.layout();
-
-      final double paddingX = 14.0;
-      final double paddingY = 8.0;
-      final double gap = 2.0;
-
-      final double bgWidth = textPainter.width + (paddingX * 2);
-      final double bgHeight = textPainter.height + (paddingY * 2);
-
-      final double widthTotal = bgWidth > iconPainter.width ? bgWidth : iconPainter.width;
-      final double heightTotal = bgHeight + gap + iconPainter.height;
-
-      final double bgLeft = (widthTotal - bgWidth) / 2;
-      final RRect pilula = RRect.fromRectAndRadius(
-        Rect.fromLTWH(bgLeft, 0, bgWidth, bgHeight),
-        const Radius.circular(16.0),
+      iconPainter.paint(
+        canvas,
+        Offset(cx - iconPainter.width / 2, cy - iconPainter.height / 2),
       );
-      final Paint paintFundo = Paint()
-        ..color = const Color(0xEE000000)
-        ..isAntiAlias = true;
-      canvas.drawRRect(pilula, paintFundo);
 
-      textPainter.paint(canvas, Offset(bgLeft + paddingX, paddingY));
-
-      final double iconLeft = (widthTotal - iconPainter.width) / 2;
-      iconPainter.paint(canvas, Offset(iconLeft, bgHeight + gap));
-
-      final img = await pictureRecorder.endRecording().toImage(widthTotal.toInt(), heightTotal.toInt());
-      final finalBytes = await img.toByteData(format: ui.ImageByteFormat.png);
-
-      final descriptor = BitmapDescriptor.bytes(finalBytes!.buffer.asUint8List());
-      _iconeCache[nomeQuadra] = descriptor; // Salva no cache!
-      return descriptor;
+      final img = await recorder.endRecording().toImage(w.toInt(), h.toInt());
+      final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+      _iconeQuadraParceira = BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+      return _iconeQuadraParceira!;
     } catch (e) {
-      return BitmapDescriptor.defaultMarkerWithHue(145.0);
+      debugPrint('Erro ícone quadra: $e');
+      return BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen);
     }
   }
 
   Future<void> _carregarQuadrasParceiras() async {
     try {
-      final snapshot = await FirebaseFirestore.instance.collection('quadras').where('aprovada', isEqualTo: true).get();
-      Set<Marker> novosPinos = {};
+      final icone = await _gerarIconeQuadraParceira();
+      final snapshot = await FirebaseFirestore.instance
+          .collection('quadras')
+          .where('aprovada', isEqualTo: true)
+          .get();
 
-      for (var doc in snapshot.docs) {
+      final Set<Marker> novosPinos = {};
+      _quadrasMeta.clear();
+
+      for (final doc in snapshot.docs) {
         final dados = doc.data();
-        final double? lat = dados['latitude']?.toDouble();
-        final double? lng = dados['longitude']?.toDouble();
-        final String nome = dados['nome'] ?? 'Quadra Parceira';
-        final String endereco = dados['endereco'] ?? '';
+        final double? lat = (dados['latitude'] as num?)?.toDouble();
+        final double? lng = (dados['longitude'] as num?)?.toDouble();
+        final String nome = dados['nome']?.toString() ?? 'Quadra Parceira';
+        final String endereco = dados['endereco']?.toString() ?? '';
 
-        if (lat != null && lng != null) {
-          BitmapDescriptor iconePersonalizado = await _gerarIconeComNome(nome);
+        if (lat == null || lng == null) continue;
 
-          novosPinos.add(
-            Marker(
-              markerId: MarkerId(doc.id),
-              position: LatLng(lat, lng),
-              anchor: const Offset(0.5, 1.0),
-              icon: iconePersonalizado, 
-              onTap: () {
-                _abrirModalConfirmacao(
-                  nomeLocalInicial: nome, 
-                  endereco: endereco, 
-                  lat: lat, 
-                  lng: lng, 
-                );
-              },
-            ),
-          );
-        }
+        _quadrasMeta[doc.id] = {
+          'nome': nome,
+          'endereco': endereco,
+          'lat': lat,
+          'lng': lng,
+        };
+
+        final id = doc.id;
+        novosPinos.add(
+          Marker(
+            markerId: MarkerId(id),
+            position: LatLng(lat, lng),
+            // Âncora na ponta da gota (centro-baixo)
+            anchor: const Offset(0.5, 1.0),
+            icon: icone,
+            consumeTapEvents: true,
+            onTap: () => _onTapQuadraParceira(id),
+          ),
+        );
       }
+
       if (mounted) setState(() => _pinosQuadras = novosPinos);
     } catch (e) {
-      debugPrint("Erro quadras: $e");
+      debugPrint('Erro quadras: $e');
     }
   }
 
-  Future<void> _buscarEnderecoTexto(String texto) async {
-    if (texto.isEmpty) {
-      setState(() => _previsoesBusca = []);
+  /// Toque no pin: se houver vizinhas a &lt; 100 m, lista para escolher; senão confirma direto.
+  void _onTapQuadraParceira(String idTocado) {
+    final meta = _quadrasMeta[idTocado];
+    if (meta == null) return;
+
+    final lat = meta['lat'] as double;
+    final lng = meta['lng'] as double;
+    final nome = meta['nome'] as String;
+    final endereco = meta['endereco'] as String? ?? '';
+
+    final vizinhas = <Map<String, dynamic>>[];
+    for (final entry in _quadrasMeta.entries) {
+      final m = entry.value;
+      final d = Geolocator.distanceBetween(
+        lat,
+        lng,
+        m['lat'] as double,
+        m['lng'] as double,
+      );
+      if (d <= _raioVizinhaMetros) {
+        vizinhas.add({
+          'id': entry.key,
+          'nome': m['nome'],
+          'endereco': m['endereco'] ?? '',
+          'lat': m['lat'],
+          'lng': m['lng'],
+          'distanciaM': d.round(),
+        });
+      }
+    }
+
+    // Ordena: mais perto primeiro
+    vizinhas.sort((a, b) => (a['distanciaM'] as int).compareTo(b['distanciaM'] as int));
+
+    _mapController?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(lat, lng), 16));
+
+    if (vizinhas.length >= 2) {
+      _chipQuadraVN.value = '${vizinhas.length} quadras aqui';
+      _mostrarEscolhaQuadrasProximas(vizinhas);
+    } else {
+      _chipQuadraVN.value = nome;
+      _abrirModalConfirmacao(
+        nomeLocalInicial: nome,
+        endereco: endereco,
+        lat: lat,
+        lng: lng,
+        origemSelecao: 'mapa_pin',
+      );
+    }
+  }
+
+  void _mostrarEscolhaQuadrasProximas(List<Map<String, dynamic>> lista) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final bottomInset = MediaQuery.paddingOf(ctx).bottom;
+        return Container(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 20 + bottomInset),
+          decoration: const BoxDecoration(
+            color: Color(0xFF161616),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Row(
+                children: [
+                  Icon(Icons.stadium_rounded, color: Color(0xFF00E676), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Quadras neste ponto',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${lista.length} parceiras a menos de ${_raioVizinhaMetros.round()} m — escolhe uma:',
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              ...lista.map((q) {
+                final dist = q['distanciaM'] as int;
+                final labelDist = dist < 5 ? 'Aqui' : '$dist m';
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        final n = q['nome'] as String;
+                        _chipQuadraVN.value = n;
+                        _abrirModalConfirmacao(
+                          nomeLocalInicial: n,
+                          endereco: q['endereco'] as String? ?? '',
+                          lat: q['lat'] as double,
+                          lng: q['lng'] as double,
+                          origemSelecao: 'mapa_pin',
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00E676).withAlpha(28),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(
+                                Icons.sports_soccer,
+                                color: Color(0xFF00E676),
+                                size: 18,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    q['nome'] as String,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  if ((q['endereco'] as String?)?.isNotEmpty == true)
+                                    Text(
+                                      q['endereco'] as String,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              labelDist,
+                              style: const TextStyle(
+                                color: Color(0xFF00E676),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.chevron_right, color: Colors.white24, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Busca — só mexe em ValueNotifiers (mapa NÃO reconstrói).
+  void _buscarEnderecoTexto(String texto) {
+    _searchDebounce?.cancel();
+    _temTextoBuscaVN.value = texto.isNotEmpty;
+
+    final query = texto.trim();
+    if (query.length < 3) {
+      _previsoesVN.value = const [];
       return;
     }
-    final url = Uri.parse('https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$texto&types=geocode|establishment&components=country:br&key=$_googleApiKey&sessiontoken=$_sessionToken&language=pt-BR');
+
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      _executarBuscaPlaces(query);
+    });
+  }
+
+  Future<void> _executarBuscaPlaces(String query) async {
+    final int seq = ++_searchSeq;
+
+    final url = Uri.https('maps.googleapis.com', '/maps/api/place/autocomplete/json', {
+      'input': query,
+      'types': 'geocode|establishment',
+      'components': 'country:br',
+      'key': _googleApiKey,
+      'sessiontoken': _sessionToken,
+      'language': 'pt-BR',
+    });
+
     try {
       final response = await http.get(url);
+      if (seq != _searchSeq || !mounted) return;
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (mounted) setState(() => _previsoesBusca = data['predictions'] ?? []);
+        _previsoesVN.value = List<dynamic>.from(data['predictions'] ?? const []);
       }
     } catch (e) {
-      debugPrint("Erro na busca: $e");
+      if (seq == _searchSeq) debugPrint('Erro na busca Places: $e');
     }
   }
 
   Future<void> _irParaLugarUid(String placeId, String nomePrincipal) async {
     FocusScope.of(context).unfocus();
-    setState(() {
-      _previsoesBusca = [];
-      _cBusca.clear();
-      _carregandoLocalizacao = true;
+    _previsoesVN.value = const [];
+    _cBusca.clear();
+    _temTextoBuscaVN.value = false;
+    _carregandoGpsVN.value = true;
+    _chipQuadraVN.value = null;
+
+    final url = Uri.https('maps.googleapis.com', '/maps/api/place/details/json', {
+      'place_id': placeId,
+      'fields': 'geometry,name,formatted_address',
+      'key': _googleApiKey,
+      'sessiontoken': _sessionToken,
+      'language': 'pt-BR',
     });
 
-    final url = Uri.parse('https://maps.googleapis.com/maps/api/place/details/json?place_id=$placeId&fields=geometry,name,formatted_address&key=$_googleApiKey&sessiontoken=$_sessionToken&language=pt-BR');
-    
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final loc = data['result']['geometry']['location'];
         final LatLng novaPos = LatLng(loc['lat'], loc['lng']);
-        
-        final String enderecoCompleto = data['result']['formatted_address'] ?? "Endereço encontrado";
-        final String nomeLugar = data['result']['name'] ?? nomePrincipal; 
+
+        final String enderecoCompleto = data['result']['formatted_address'] ?? 'Endereço encontrado';
+        final String nomeLugar = data['result']['name'] ?? nomePrincipal;
 
         if (mounted) {
-          setState(() {
-            _posicaoAtual = novaPos;
-            _ruaEletro = enderecoCompleto; 
-            _nomeLocalEletro = nomeLugar;
-            _veioDaBusca = true; 
-            _carregandoLocalizacao = false;
-            _sessionToken = const Uuid().v4(); 
-          });
+          _posicaoAtual = novaPos;
+          _ruaVN.value = enderecoCompleto;
+          _nomeLocalVN.value = nomeLugar;
+          _veioDaBusca = true;
+          _carregandoGpsVN.value = false;
+          _sessionToken = const Uuid().v4();
         }
 
         _mapController?.animateCamera(CameraUpdate.newLatLngZoom(novaPos, 16));
 
         if (nomeLugar != enderecoCompleto && !nomeLugar.contains(RegExp(r'\d'))) {
-           Future.delayed(const Duration(milliseconds: 800), () {
-             _abrirModalConfirmacao(nomeLocalInicial: nomeLugar, endereco: enderecoCompleto, lat: novaPos.latitude, lng: novaPos.longitude);
-           });
+          Future.delayed(const Duration(milliseconds: 800), () {
+            if (!mounted) return;
+            _abrirModalConfirmacao(
+              nomeLocalInicial: nomeLugar,
+              endereco: enderecoCompleto,
+              lat: novaPos.latitude,
+              lng: novaPos.longitude,
+              origemSelecao: 'busca_nome',
+            );
+          });
         }
-
       }
     } catch (e) {
-      if (mounted) setState(() => _carregandoLocalizacao = false);
-      debugPrint("Erro detalhes: $e");
+      if (mounted) _carregandoGpsVN.value = false;
+      debugPrint('Erro detalhes: $e');
     }
   }
 
   Future<void> _pegarLocalizacaoAtual() async {
-    setState(() => _carregandoLocalizacao = true);
-    
+    _carregandoGpsVN.value = true;
+    _chipQuadraVN.value = null;
+
     bool servicoAtivo = await Geolocator.isLocationServiceEnabled();
     if (!servicoAtivo) {
-      if (mounted) setState(() => _carregandoLocalizacao = false);
+      if (mounted) _carregandoGpsVN.value = false;
       return;
     }
 
@@ -252,18 +513,16 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
     if (permissao == LocationPermission.denied) {
       permissao = await Geolocator.requestPermission();
       if (permissao == LocationPermission.denied) {
-        if (mounted) setState(() => _carregandoLocalizacao = false);
+        if (mounted) _carregandoGpsVN.value = false;
         return;
       }
     }
 
-    Position pos = await Geolocator.getCurrentPosition();
+    final Position pos = await Geolocator.getCurrentPosition();
     if (mounted) {
-      setState(() {
-        _posicaoAtual = LatLng(pos.latitude, pos.longitude);
-        _carregandoLocalizacao = false;
-        _veioDaBusca = false; 
-      });
+      _posicaoAtual = LatLng(pos.latitude, pos.longitude);
+      _carregandoGpsVN.value = false;
+      _veioDaBusca = false;
     }
 
     _mapController?.animateCamera(CameraUpdate.newLatLngZoom(_posicaoAtual, 16));
@@ -271,10 +530,8 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
   }
 
   void _onCameraIdleOtimizado() {
-    if (mounted) setState(() => _movendoMapa = false);
-    
+    _movendoVN.value = false;
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-    
     _debounceTimer = Timer(const Duration(milliseconds: 500), () {
       _atualizarEnderecoRua(_posicaoAtual);
     });
@@ -282,44 +539,49 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
 
   Future<void> _atualizarEnderecoRua(LatLng pos) async {
     if (_veioDaBusca) {
-      _veioDaBusca = false; 
-      return; 
+      _veioDaBusca = false;
+      return;
     }
 
     try {
-      List<Placemark> locais = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+      final locais = await placemarkFromCoordinates(pos.latitude, pos.longitude);
       if (locais.isNotEmpty && mounted) {
-        Placemark lugar = locais.first;
-        setState(() {
-          String rua = lugar.thoroughfare ?? lugar.street ?? "Endereço desconhecido";
-          String numero = lugar.subThoroughfare ?? ""; 
-          String bairro = lugar.subLocality ?? lugar.locality ?? "";
-          String enderecoCompleto = rua;
-          
-          if (numero.isNotEmpty && numero != "S/N") enderecoCompleto += ", $numero";
-          if (bairro.isNotEmpty) enderecoCompleto += " - $bairro";
-          
-          _ruaEletro = enderecoCompleto;
+        final lugar = locais.first;
+        String rua = lugar.thoroughfare ?? lugar.street ?? 'Endereço desconhecido';
+        final numero = lugar.subThoroughfare ?? '';
+        final bairro = lugar.subLocality ?? lugar.locality ?? '';
+        var enderecoCompleto = rua;
+        if (numero.isNotEmpty && numero != 'S/N') enderecoCompleto += ', $numero';
+        if (bairro.isNotEmpty) enderecoCompleto += ' - $bairro';
 
-          String possivelNome = lugar.name ?? "";
-          if (possivelNome.isNotEmpty && possivelNome != numero && !RegExp(r'^\d+$').hasMatch(possivelNome) && possivelNome != rua) {
-            _nomeLocalEletro = possivelNome;
-          } else {
-            _nomeLocalEletro = ""; 
-          }
-        });
+        _ruaVN.value = enderecoCompleto;
+        final possivelNome = lugar.name ?? '';
+        if (possivelNome.isNotEmpty &&
+            possivelNome != numero &&
+            !RegExp(r'^\d+$').hasMatch(possivelNome) &&
+            possivelNome != rua) {
+          _nomeLocalVN.value = possivelNome;
+        } else {
+          _nomeLocalVN.value = '';
+        }
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _ruaEletro = "Rua não encontrada (Mova o pino)";
-          _nomeLocalEletro = "";
-        });
+        _ruaVN.value = 'Rua não encontrada (Mova o pino)';
+        _nomeLocalVN.value = '';
       }
     }
   }
 
-  void _abrirModalConfirmacao({String? nomeLocalInicial, required String endereco, required double lat, required double lng, String? obsInicial}) {
+  void _abrirModalConfirmacao({
+    String? nomeLocalInicial,
+    required String endereco,
+    required double lat,
+    required double lng,
+    String? obsInicial,
+    String? origemSelecao,
+  }) {
+    final origem = origemSelecao ?? (_veioDaBusca ? 'busca_nome' : 'mapa_pin');
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -330,23 +592,26 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
         lat: lat,
         lng: lng,
         obsInicial: obsInicial,
+        origemSelecao: origem,
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final topPad = MediaQuery.of(context).padding.top;
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+
     return Scaffold(
-      resizeToAvoidBottomInset: false, // 🚀 EVITA O REDIMENSIONAMENTO DO MAPA AO ABRIR O TECLADO
+      // Teclado NÃO redimensiona o mapa (evita rebuild nativo caro)
+      resizeToAvoidBottomInset: false,
       backgroundColor: Colors.black,
       body: Stack(
-        alignment: Alignment.center, 
+        alignment: Alignment.center,
         children: [
+          // ===== MAPA: só reconstrói quando markers mudam (load inicial) =====
           GoogleMap(
-            padding: EdgeInsets.only(
-              top: MediaQuery.of(context).padding.top + 80, 
-              bottom: MediaQuery.of(context).padding.bottom + 90, 
-            ),
+            padding: EdgeInsets.only(top: topPad + 80, bottom: bottomPad + 90),
             style: _mapStyle,
             initialCameraPosition: CameraPosition(target: _posicaoAtual, zoom: 15),
             myLocationEnabled: true,
@@ -354,129 +619,256 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
             mapToolbarEnabled: false,
             zoomControlsEnabled: false,
             markers: _pinosQuadras,
-            onMapCreated: (controller) => _mapController = controller,
+            onMapCreated: (c) => _mapController = c,
             onCameraMoveStarted: () {
-              if (mounted) setState(() => _movendoMapa = true);
+              _movendoVN.value = true;
+              _chipQuadraVN.value = null;
               if (!_veioDaBusca) FocusScope.of(context).unfocus();
             },
             onCameraMove: (pos) => _posicaoAtual = pos.target,
             onCameraIdle: _onCameraIdleOtimizado,
           ),
 
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              AnimatedOpacity(
-                opacity: _movendoMapa ? 0.0 : 1.0,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_carregandoLocalizacao)
-                        const Text("Buscando GPS...", style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600))
-                      else ...[
-                        if (_nomeLocalEletro.isNotEmpty)
-                          Text(_nomeLocalEletro, style: const TextStyle(color: Color(0xFF00E676), fontSize: 14, fontWeight: FontWeight.w900)),
-                        
-                        Text(
-                          _ruaEletro, 
-                          style: TextStyle(color: _nomeLocalEletro.isNotEmpty ? Colors.white70 : Colors.white, fontSize: 11, fontWeight: FontWeight.w600), 
-                          textAlign: TextAlign.center
-                        ),
-                      ]
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 6), 
-              const Icon(Icons.location_on, size: 24, color: Color(0xFF00E676)), 
-              const SizedBox(height: 24), 
-            ],
+          // ===== Label central (endereço) — ValueListenable, sem setState =====
+          ValueListenableBuilder<bool>(
+            valueListenable: _movendoVN,
+            builder: (_, movendo, __) {
+              return ValueListenableBuilder<String>(
+                valueListenable: _ruaVN,
+                builder: (_, rua, __) {
+                  return ValueListenableBuilder<String>(
+                    valueListenable: _nomeLocalVN,
+                    builder: (_, nome, __) {
+                      return Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          AnimatedOpacity(
+                            opacity: movendo ? 0.0 : 1.0,
+                            duration: const Duration(milliseconds: 180),
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 32),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.black87,
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 6)],
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (nome.isNotEmpty)
+                                    Text(
+                                      nome,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xFF00E676),
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  Text(
+                                    rua,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: nome.isNotEmpty ? Colors.white70 : Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Icon(Icons.location_on, size: 26, color: Color(0xFF00E676)),
+                          const SizedBox(height: 24),
+                        ],
+                      );
+                    },
+                  );
+                },
+              );
+            },
           ),
 
+          // ===== Chip nome da quadra parceira (só ao tocar no pin) =====
+          ValueListenableBuilder<String?>(
+            valueListenable: _chipQuadraVN,
+            builder: (_, chip, __) {
+              if (chip == null) return const SizedBox.shrink();
+              return Positioned(
+                top: topPad + 78,
+                left: 24,
+                right: 24,
+                child: Center(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xF0121212),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFF00E676).withAlpha(160)),
+                        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8)],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.stadium_rounded, color: Color(0xFF00E676), size: 16),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              chip,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Color(0xFF00E676),
+                                fontWeight: FontWeight.w900,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          // ===== Barra de busca + previsões (isolada do mapa) =====
           SafeArea(
             child: Stack(
               children: [
                 Positioned(
-                  top: 10, left: 20, right: 20,
+                  top: 10,
+                  left: 16,
+                  right: 16,
                   child: Column(
                     children: [
                       Container(
                         decoration: BoxDecoration(
                           color: const Color(0xFF1E1E1E),
                           borderRadius: BorderRadius.circular(16),
-                          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 4))]
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 4)),
+                          ],
                         ),
                         child: TextField(
                           controller: _cBusca,
                           style: const TextStyle(color: Colors.white, fontSize: 15),
                           onChanged: _buscarEnderecoTexto,
                           decoration: InputDecoration(
-                            hintText: "Digite o endereço ou nome da arena...",
+                            hintText: 'Digite o endereço ou nome da arena...',
                             hintStyle: const TextStyle(color: Colors.white54, fontSize: 14),
                             prefixIcon: IconButton(
                               icon: const Icon(Icons.arrow_back, color: Colors.white),
                               onPressed: () => Navigator.pop(context),
                             ),
-                            suffixIcon: _cBusca.text.isNotEmpty 
-                              ? IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => setState(() { _cBusca.clear(); _previsoesBusca = []; }))
-                              : const Icon(Icons.search, color: Color(0xFF00E676)),
+                            suffixIcon: ValueListenableBuilder<bool>(
+                              valueListenable: _temTextoBuscaVN,
+                              builder: (_, tem, __) {
+                                if (!tem) {
+                                  return const Icon(Icons.search, color: Color(0xFF00E676));
+                                }
+                                return IconButton(
+                                  icon: const Icon(Icons.close, color: Colors.grey),
+                                  onPressed: () {
+                                    _cBusca.clear();
+                                    _previsoesVN.value = const [];
+                                    _temTextoBuscaVN.value = false;
+                                  },
+                                );
+                              },
+                            ),
                             border: InputBorder.none,
                             contentPadding: const EdgeInsets.symmetric(vertical: 16),
                           ),
                         ),
                       ),
-                      
-                      if (_previsoesBusca.isNotEmpty)
-                        Container(
-                          margin: const EdgeInsets.only(top: 8),
-                          constraints: const BoxConstraints(maxHeight: 300),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E1E1E), 
-                            borderRadius: BorderRadius.circular(16),
-                            boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 4))]
-                          ),
-                          child: ListView.separated(
-                            shrinkWrap: true,
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            itemCount: _previsoesBusca.length,
-                            separatorBuilder: (_, _) => const Divider(color: Colors.white10, height: 1),
-                            itemBuilder: (context, index) {
-                              final p = _previsoesBusca[index];
-                              return ListTile(
-                                leading: const Icon(Icons.location_on, color: Colors.grey, size: 20),
-                                title: Text(p['structured_formatting']['main_text'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
-                                subtitle: Text(p['structured_formatting']['secondary_text'] ?? '', style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                                onTap: () => _irParaLugarUid(p['place_id'], p['structured_formatting']['main_text']),
-                              );
-                            },
-                          ),
-                        ),
+                      ValueListenableBuilder<List<dynamic>>(
+                        valueListenable: _previsoesVN,
+                        builder: (_, previsoes, __) {
+                          if (previsoes.isEmpty) return const SizedBox.shrink();
+                          return Container(
+                            margin: const EdgeInsets.only(top: 8),
+                            constraints: const BoxConstraints(maxHeight: 280),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1E1E1E),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: const [
+                                BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 4)),
+                              ],
+                            ),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              itemCount: previsoes.length,
+                              separatorBuilder: (_, __) =>
+                                  const Divider(color: Colors.white10, height: 1),
+                              itemBuilder: (context, index) {
+                                final p = previsoes[index];
+                                final main = p['structured_formatting']?['main_text'] ?? '';
+                                final secondary =
+                                    p['structured_formatting']?['secondary_text'] ?? '';
+                                return ListTile(
+                                  leading: const Icon(Icons.location_on, color: Colors.grey, size: 20),
+                                  title: Text(
+                                    main,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    secondary,
+                                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                  ),
+                                  onTap: () => _irParaLugarUid(p['place_id'], main),
+                                );
+                              },
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),
 
                 Positioned(
-                  bottom: 100, right: 20,
-                  child: FloatingActionButton(
-                    backgroundColor: const Color(0xFF1E1E1E),
-                    elevation: 4,
-                    child: _carregandoLocalizacao 
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Color(0xFF00E676), strokeWidth: 2))
-                      : const Icon(Icons.my_location, color: Color(0xFF00E676)),
-                    onPressed: _pegarLocalizacaoAtual,
+                  bottom: 100,
+                  right: 20,
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _carregandoGpsVN,
+                    builder: (_, carregando, __) {
+                      return FloatingActionButton(
+                        backgroundColor: const Color(0xFF1E1E1E),
+                        elevation: 4,
+                        onPressed: _pegarLocalizacaoAtual,
+                        child: carregando
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  color: Color(0xFF00E676),
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.my_location, color: Color(0xFF00E676)),
+                      );
+                    },
                   ),
                 ),
 
                 Positioned(
-                  bottom: 20, left: 20, right: 20,
+                  bottom: 20,
+                  left: 20,
+                  right: 20,
                   child: SizedBox(
                     height: 54,
                     child: ElevatedButton(
@@ -486,14 +878,27 @@ class _MapaSeletorPageState extends State<MapaSeletorPage> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
                       onPressed: () {
-                        _abrirModalConfirmacao(nomeLocalInicial: _nomeLocalEletro, endereco: _ruaEletro, lat: _posicaoAtual.latitude, lng: _posicaoAtual.longitude);
+                        _abrirModalConfirmacao(
+                          nomeLocalInicial: _nomeLocalVN.value,
+                          endereco: _ruaVN.value,
+                          lat: _posicaoAtual.latitude,
+                          lng: _posicaoAtual.longitude,
+                        );
                       },
                       child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(Icons.check_circle_outline, color: Colors.black, size: 22),
                           SizedBox(width: 8),
-                          Text("USAR ESTE LOCAL", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.5)),
+                          Text(
+                            'USAR ESTE LOCAL',
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 15,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -515,6 +920,8 @@ class _ModalDetalhesQuadra extends StatefulWidget {
   final double lat;
   final double lng;
   final String? obsInicial;
+  /// 'busca_nome' = veio da barra de busca Places | 'mapa_pin' = pin/GPS/arraste
+  final String origemSelecao;
 
   const _ModalDetalhesQuadra({
     this.nomeLocalInicial,
@@ -522,6 +929,7 @@ class _ModalDetalhesQuadra extends StatefulWidget {
     required this.lat,
     required this.lng,
     this.obsInicial,
+    this.origemSelecao = 'mapa_pin',
   });
 
   @override
@@ -631,6 +1039,7 @@ class _ModalDetalhesQuadraState extends State<_ModalDetalhesQuadra> {
                       'obs': cObs.text.trim(),
                       'lat': widget.lat,
                       'lng': widget.lng,
+                      'origemSelecao': widget.origemSelecao, // busca_nome | mapa_pin
                     });
                 },
                 child: const Text("CONFIRMAR E SALVAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.5)),

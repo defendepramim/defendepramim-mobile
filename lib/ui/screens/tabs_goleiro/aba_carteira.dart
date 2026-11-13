@@ -1,6 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+
+import 'package:defendepramim/core/dinheiro.dart';
 
 class AbaCarteira extends StatefulWidget {
   const AbaCarteira({super.key});
@@ -13,10 +17,8 @@ class _AbaCarteiraState extends State<AbaCarteira> {
   final Color primaryColor = const Color(0xFF00E676);
   final Color backgroundColor = Colors.black;
 
-  // 🟢 Controle do filtro atual ('Tudo', 'Entradas', 'Saques')
   String _filtroAtual = 'Tudo';
 
-  // --- 🛰️ UTILITÁRIOS ---
   void _showSnackBar(String texto, {Color cor = Colors.blue}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -25,14 +27,21 @@ class _AbaCarteiraState extends State<AbaCarteira> {
         backgroundColor: cor,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.all(20), 
+        margin: const EdgeInsets.all(20),
         duration: const Duration(seconds: 3),
       ),
     );
   }
 
-  // --- 💸 LÓGICA DE SAQUE ENXUTA ---
-  Future<void> _iniciarFluxoSaque(BuildContext context, String uid, double saldoDisponivel, Color primary, Map<String, dynamic> userDados) async {
+  // ---------------------------------------------------------------------------
+  // SAQUE — só pede ao servidor (Callable solicitarSaque)
+  // ---------------------------------------------------------------------------
+  Future<void> _iniciarFluxoSaque(
+    BuildContext context,
+    String uid,
+    double saldoDisponivel,
+    Color primary,
+  ) async {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -48,22 +57,35 @@ class _AbaCarteiraState extends State<AbaCarteira> {
 
       final chavePix = dados?['chavePix'];
       final tipoPix = dados?['tipoPix'];
-      final nomeGoleiro = dados?['nome'] ?? "Goleiro";
 
       if (chavePix == null || chavePix.toString().trim().isEmpty) {
         _showSnackBar("Cadastre sua chave PIX na aba 'Perfil' para poder sacar!", cor: Colors.orange);
         return;
       }
 
-      _abrirModalDigitacaoSaque(context, uid, nomeGoleiro, chavePix.toString(), tipoPix.toString(), saldoDisponivel, primary);
+      _abrirModalDigitacaoSaque(
+        context,
+        uid,
+        chavePix.toString(),
+        tipoPix?.toString() ?? '',
+        saldoDisponivel,
+        primary,
+      );
     } catch (e) {
       if (!context.mounted) return;
-      Navigator.pop(context); 
+      Navigator.pop(context);
       _showSnackBar("Erro ao verificar dados da conta: $e", cor: Colors.red);
     }
   }
 
-  void _abrirModalDigitacaoSaque(BuildContext context, String uid, String nomeGoleiro, String chavePix, String tipoPix, double saldoMaximo, Color primary) {
+  void _abrirModalDigitacaoSaque(
+    BuildContext context,
+    String uid,
+    String chavePix,
+    String tipoPix,
+    double saldoMaximo,
+    Color primary,
+  ) {
     final TextEditingController valorController = TextEditingController();
     bool processando = false;
 
@@ -90,12 +112,21 @@ class _AbaCarteiraState extends State<AbaCarteira> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text("VALOR DO SAQUE", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                      IconButton(icon: const Icon(Icons.close, color: Colors.white54), onPressed: () => Navigator.pop(ctx))
+                      const Text(
+                        "VALOR DO SAQUE",
+                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Text("Livre para saque: R\$ ${saldoMaximo.toStringAsFixed(2)}\nPIX: $chavePix", style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                  Text(
+                    "Livre para saque: R\$ ${saldoMaximo.toStringAsFixed(2)}\nPIX: $chavePix",
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
                   const SizedBox(height: 20),
                   TextField(
                     controller: valorController,
@@ -107,9 +138,14 @@ class _AbaCarteiraState extends State<AbaCarteira> {
                       prefixStyle: const TextStyle(color: Colors.white54, fontSize: 24),
                       filled: true,
                       fillColor: const Color(0xFF1A1A1A),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
                       suffixIcon: TextButton(
-                        onPressed: () => setStateSB(() => valorController.text = saldoMaximo.toStringAsFixed(2)),
+                        onPressed: () => setStateSB(
+                          () => valorController.text = saldoMaximo.toStringAsFixed(2),
+                        ),
                         child: Text("TUDO", style: TextStyle(color: primary, fontWeight: FontWeight.bold)),
                       ),
                     ),
@@ -119,18 +155,20 @@ class _AbaCarteiraState extends State<AbaCarteira> {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primary,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
                       onPressed: processando
                           ? null
                           : () async {
-                              String textoValor = valorController.text.replaceAll(',', '.');
-                              double? valorSaque = double.tryParse(textoValor);
+                              final textoValor = valorController.text.replaceAll(',', '.');
+                              final valorSaque = double.tryParse(textoValor);
 
                               if (valorSaque == null || valorSaque <= 0) {
                                 _showSnackBar("Digite um valor válido!", cor: Colors.orange);
                                 return;
                               }
-
                               if (valorSaque > saldoMaximo) {
                                 _showSnackBar("Saldo insuficiente para este valor.", cor: Colors.red);
                                 return;
@@ -139,56 +177,41 @@ class _AbaCarteiraState extends State<AbaCarteira> {
                               setStateSB(() => processando = true);
 
                               try {
-                                final userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-                                final extratoRef = userRef.collection('extrato').doc();
-                                final saqueRef = FirebaseFirestore.instance.collection('saques').doc();
+                                final valorCentavos = Dinheiro.paraCentavos(valorSaque);
+                                final idempotencyKey = const Uuid().v4();
 
-                                await FirebaseFirestore.instance.runTransaction((transaction) async {
-                                  DocumentSnapshot userSnap = await transaction.get(userRef);
-                                  double saldoAtual = (userSnap.data() as Map<String, dynamic>?)?['saldo']?.toDouble() ?? 0.0;
+                                final callable = FirebaseFunctions.instanceFor(
+                                  region: 'southamerica-east1',
+                                ).httpsCallable('solicitarSaque');
 
-                                  double novoSaldo = saldoAtual - valorSaque;
-                                  transaction.update(userRef, {'saldo': novoSaldo});
-
-                                  transaction.set(extratoRef, {
-                                    'id': extratoRef.id,
-                                    'idUsuario': uid,
-                                    'tipo': 'saida',
-                                    'categoria': 'saque',
-                                    'valor': valorSaque,
-                                    'saldoAnterior': saldoAtual,
-                                    'saldoAtual': novoSaldo,
-                                    'descricao': 'Saque solicitado',
-                                    'status': 'pendente',
-                                    'data': FieldValue.serverTimestamp(),
-                                  });
-
-                                  transaction.set(saqueRef, {
-                                    'id': saqueRef.id,
-                                    'idGoleiro': uid,
-                                    'nomeGoleiro': nomeGoleiro,
-                                    'valor': valorSaque,
-                                    'chavePix': chavePix,
-                                    'tipoPix': tipoPix,
-                                    'status': 'pendente',
-                                    'idExtrato': extratoRef.id,
-                                    'dataSolicitacao': FieldValue.serverTimestamp(),
-                                  });
+                                await callable.call({
+                                  'valorCentavos': valorCentavos,
+                                  'idempotencyKey': idempotencyKey,
                                 });
 
                                 if (context.mounted) {
-                                  FocusScope.of(context).unfocus(); 
+                                  FocusScope.of(context).unfocus();
                                   Navigator.pop(ctx);
                                   _showSnackBar("Saque solicitado com sucesso!", cor: Colors.green);
                                 }
+                              } on FirebaseFunctionsException catch (e) {
+                                setStateSB(() => processando = false);
+                                _showSnackBar(e.message ?? "Erro ao solicitar saque.", cor: Colors.red);
                               } catch (e) {
                                 setStateSB(() => processando = false);
                                 _showSnackBar("Erro: $e", cor: Colors.red);
                               }
                             },
                       child: processando
-                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
-                          : const Text("CONFIRMAR SAQUE", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2),
+                            )
+                          : const Text(
+                              "CONFIRMAR SAQUE",
+                              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                            ),
                     ),
                   ),
                 ],
@@ -200,30 +223,25 @@ class _AbaCarteiraState extends State<AbaCarteira> {
     );
   }
 
-  // --- 🧾 MODAL DE COMPROVANTE / DETALHES ---
-  // 🟢 Adicionamos o parâmetro descricaoCustomizada para ele herdar o texto "Saque efetuado"
-  void _mostrarDetalhesTransacao(Map<String, dynamic> data, Color color, String prefix, String tipoTexto, String descricaoCustomizada) {
-    final double valor = double.tryParse(data['valor']?.toString() ?? '0') ?? 0.0;
+  // ---------------------------------------------------------------------------
+  // DETALHES DO LANÇAMENTO (ledger)
+  // ---------------------------------------------------------------------------
+  void _mostrarDetalhesTransacao(
+    Map<String, dynamic> data,
+    Color color,
+    String prefix,
+    String tipoTexto,
+    String descricaoCustomizada,
+  ) {
+    final int centavos = _centavosDe(data);
+    final double valor = Dinheiro.paraReal(centavos);
 
-    // 🟢 HORA CORRIGIDA NO RECIBO TAMBÉM
-    final DateTime dt = (data['dataAtualizacao'] as Timestamp?)?.toDate() ?? (data['data'] as Timestamp?)?.toDate() ?? DateTime.now();
-    
-    final dia = dt.day.toString().padLeft(2, '0');
-    final mes = dt.month.toString().padLeft(2, '0');
-    final ano = dt.year;
-    final hora = dt.hour.toString().padLeft(2, '0');
-    final minuto = dt.minute.toString().padLeft(2, '0');
-    String dataTransacaoFormatada = "$dia/$mes/$ano às $hora:$minuto";
+    final DateTime dt = (data['criadoEm'] as Timestamp?)?.toDate() ??
+        (data['data'] as Timestamp?)?.toDate() ??
+        DateTime.now();
 
-    String? dataJogoFormatada;
-    if (data['dataHoraJogo'] != null) {
-      final DateTime dtJogo = (data['dataHoraJogo'] as Timestamp).toDate();
-      final diaJ = dtJogo.day.toString().padLeft(2, '0');
-      final mesJ = dtJogo.month.toString().padLeft(2, '0');
-      final horaJ = dtJogo.hour.toString().padLeft(2, '0');
-      final minutoJ = dtJogo.minute.toString().padLeft(2, '0');
-      dataJogoFormatada = "$diaJ/$mesJ às $horaJ:$minutoJ";
-    }
+    final dataTransacaoFormatada =
+        "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year} às ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
 
     showModalBottomSheet(
       context: context,
@@ -234,41 +252,44 @@ class _AbaCarteiraState extends State<AbaCarteira> {
         final bottomPadding = MediaQuery.of(ctx).padding.bottom;
 
         return Padding(
-          padding: EdgeInsets.only(
-            left: 24,
-            right: 24,
-            top: 24,
-            bottom: 24 + bottomPadding,
-          ),
+          padding: EdgeInsets.only(left: 24, right: 24, top: 24, bottom: 24 + bottomPadding),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10))),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)),
+              ),
               const SizedBox(height: 20),
-              
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(color: color.withAlpha(26), shape: BoxShape.circle),
-                child: Icon(color == primaryColor ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded, color: color, size: 32),
+                child: Icon(
+                  color == primaryColor ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                  color: color,
+                  size: 32,
+                ),
               ),
               const SizedBox(height: 12),
-              Text(tipoTexto, style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 12, letterSpacing: 1.2)),
+              Text(
+                tipoTexto,
+                style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 12, letterSpacing: 1.2),
+              ),
               const SizedBox(height: 6),
-              
-              Text("$prefix R\$ ${valor.toStringAsFixed(2)}", style: TextStyle(color: color, fontSize: 32, fontWeight: FontWeight.w900)),
+              Text(
+                "$prefix R\$ ${valor.toStringAsFixed(2)}",
+                style: TextStyle(color: color, fontSize: 32, fontWeight: FontWeight.w900),
+              ),
               const SizedBox(height: 20),
               const Divider(color: Colors.white10),
               const SizedBox(height: 12),
-
-              _linhaRecibo("Descrição / Local", descricaoCustomizada),
-              
-              if (dataJogoFormatada != null)
-                _linhaRecibo("Horário da Partida", dataJogoFormatada),
-
+              _linhaRecibo("Descrição", descricaoCustomizada),
               _linhaRecibo("Data do Lançamento", dataTransacaoFormatada),
-              _linhaRecibo("Categoria", (data['categoria'] ?? 'geral').toString().toUpperCase()),
-              if (data['id'] != null) _linhaRecibo("ID da Transação", data['id'].toString()),
-
+              _linhaRecibo("Tipo", (data['tipo'] ?? 'geral').toString().toUpperCase()),
+              if (data['idempotencyKey'] != null)
+                _linhaRecibo("ID", data['idempotencyKey'].toString()),
+              if (data['idJogo'] != null) _linhaRecibo("Jogo", data['idJogo'].toString()),
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
@@ -300,9 +321,14 @@ class _AbaCarteiraState extends State<AbaCarteira> {
           const SizedBox(width: 16),
           Expanded(
             child: Text(
-              valor, 
-              textAlign: TextAlign.end, 
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13, height: 1.2),
+              valor,
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                height: 1.2,
+              ),
             ),
           ),
         ],
@@ -310,52 +336,106 @@ class _AbaCarteiraState extends State<AbaCarteira> {
     );
   }
 
+  /// Lê centavos do ledger (oficial) ou valor legado em R$.
+  int _centavosDe(Map<String, dynamic> data) {
+    if (data['valorCentavos'] is int) return data['valorCentavos'] as int;
+    if (data['valorCentavos'] is num) return (data['valorCentavos'] as num).round();
+    if (data['valor'] is num) return Dinheiro.paraCentavos((data['valor'] as num).toDouble());
+    return 0;
+  }
+
+  bool _isEntrada(String tipo) {
+    return tipo == 'recebimento_jogo' ||
+        tipo == 'recarga' ||
+        tipo == 'saque_recusado' ||
+        tipo == 'estorno_contestacao' ||
+        tipo == 'recebimento';
+  }
+
+  bool _isSaida(String tipo) {
+    return tipo == 'saque_solicitado' ||
+        tipo == 'saque_pago' ||
+        tipo == 'pagamento_jogo' ||
+        tipo == 'multa_desistencia' ||
+        tipo == 'abatimento_multa' ||
+        tipo == 'saida';
+  }
+
+  // ---------------------------------------------------------------------------
+  // BUILD
+  // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    if (uid == null) return const Center(child: Text("Usuário não logado"));
+    if (uid == null) {
+      return const Center(child: Text("Usuário não logado", style: TextStyle(color: Colors.white)));
+    }
 
     return Scaffold(
       backgroundColor: backgroundColor,
       body: SafeArea(
         child: StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance.collection('usuarios').doc(uid).snapshots(),
-          builder: (context, userSnapshot) {
-            if (userSnapshot.hasError) return const Center(child: Text("Erro ao carregar perfil", style: TextStyle(color: Colors.white)));
-            if (userSnapshot.connectionState == ConnectionState.waiting) {
+          // SALDO OFICIAL
+          stream: FirebaseFirestore.instance.collection('carteiras').doc(uid).snapshots(),
+          builder: (context, carteiraSnapshot) {
+            if (carteiraSnapshot.hasError) {
+              return const Center(
+                child: Text("Erro ao carregar carteira", style: TextStyle(color: Colors.white)),
+              );
+            }
+            if (carteiraSnapshot.connectionState == ConnectionState.waiting && !carteiraSnapshot.hasData) {
               return Center(child: CircularProgressIndicator(color: primaryColor));
             }
 
-            final userDados = userSnapshot.data?.data() as Map<String, dynamic>? ?? {};
-            
-            double saldoBruto = double.tryParse(userDados['saldo']?.toString() ?? '0') ?? 0.0;
-            double multasPendentes = double.tryParse(userDados['multasPendentes']?.toString() ?? '0') ?? 0.0;
-            double valorRetidoContestacao = double.tryParse(userDados['saldoRetido']?.toString() ?? '0') ?? 0.0;
+            final carteira = (carteiraSnapshot.data?.data() as Map<String, dynamic>?) ?? {};
+            final int saldoCentavos = (carteira['saldoCentavos'] as num?)?.round() ?? 0;
+            final int multasCentavos = (carteira['multasPendentesCentavos'] as num?)?.round() ?? 0;
+            final int retidoCentavos = (carteira['retidoCentavos'] as num?)?.round() ?? 0;
 
-            double saldoLiquidoParaSaque = saldoBruto - multasPendentes - valorRetidoContestacao;
+            final double saldoBruto = Dinheiro.paraReal(saldoCentavos);
+            final double multasPendentes = Dinheiro.paraReal(multasCentavos);
+            final double valorRetido = Dinheiro.paraReal(retidoCentavos);
+
+            // Disponível = saldo - retido (multas são dívida separada; gari abate sozinho)
+            double saldoLiquidoParaSaque = saldoBruto - valorRetido;
             if (saldoLiquidoParaSaque < 0) saldoLiquidoParaSaque = 0.0;
 
             return StreamBuilder<QuerySnapshot>(
+              // HISTÓRICO OFICIAL (ledger)
               stream: FirebaseFirestore.instance
-                  .collection('usuarios')
-                  .doc(uid)
-                  .collection('extrato')
-                  .orderBy('data', descending: true)
+                  .collection('ledger')
+                  .where('uid', isEqualTo: uid)
                   .snapshots(),
-              builder: (context, extratoSnapshot) {
-                var documentosAtuais = extratoSnapshot.data?.docs ?? [];
+              builder: (context, ledgerSnapshot) {
+                if (ledgerSnapshot.hasError) {
+                  return const Center(
+                    child: Text("Erro ao carregar extrato", style: TextStyle(color: Colors.white)),
+                  );
+                }
+
+                var docs = ledgerSnapshot.data?.docs ?? [];
+
+                // Ordenar no cliente (evita índice composto obrigatório no arranque)
+                docs = List.from(docs);
+                docs.sort((a, b) {
+                  final da = (a.data() as Map)['criadoEm'] as Timestamp?;
+                  final db_ = (b.data() as Map)['criadoEm'] as Timestamp?;
+                  if (da == null && db_ == null) return 0;
+                  if (da == null) return 1;
+                  if (db_ == null) return -1;
+                  return db_.compareTo(da);
+                });
 
                 if (_filtroAtual != 'Tudo') {
-                  documentosAtuais = documentosAtuais.where((doc) {
+                  docs = docs.where((doc) {
                     final item = doc.data() as Map<String, dynamic>;
-                    final tipo = item['tipo'] ?? '';
-                    final categoria = item['categoria'] ?? '';
-
-                    if (_filtroAtual == 'Entradas') {
-                      return tipo != 'saida' && categoria != 'saque' && !tipo.toString().contains('multa');
-                    } else if (_filtroAtual == 'Saques') {
-                      return tipo == 'saida' || categoria == 'saque';
+                    final tipo = (item['tipo'] ?? '').toString();
+                    if (_filtroAtual == 'Entradas') return _isEntrada(tipo);
+                    if (_filtroAtual == 'Saques') {
+                      return tipo == 'saque_solicitado' ||
+                          tipo == 'saque_pago' ||
+                          tipo == 'saque_recusado';
                     }
                     return true;
                   }).toList();
@@ -365,46 +445,57 @@ class _AbaCarteiraState extends State<AbaCarteira> {
                   padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
                   children: [
                     const Text(
-                      "Sua Carteira", 
-                      style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)
+                      "Sua Carteira",
+                      style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
-
-                    _cardSaldoGoleiro(context, uid, saldoLiquidoParaSaque, saldoBruto, multasPendentes, primaryColor, userDados),
+                    _cardSaldoGoleiro(
+                      context,
+                      uid,
+                      saldoLiquidoParaSaque,
+                      saldoBruto,
+                      multasPendentes,
+                      primaryColor,
+                    ),
                     const SizedBox(height: 16),
-
-                    if (valorRetidoContestacao > 0 || multasPendentes > 0)
+                    if (valorRetido > 0 || multasPendentes > 0)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 16),
                         child: Row(
                           children: [
-                            if (valorRetidoContestacao > 0)
+                            if (valorRetido > 0)
                               Expanded(
-                                child: _cardStatusEspecial("VALOR RETIDO", valorRetidoContestacao, Icons.lock_clock, Colors.orangeAccent),
+                                child: _cardStatusEspecial(
+                                  "VALOR RETIDO",
+                                  valorRetido,
+                                  Icons.lock_clock,
+                                  Colors.orangeAccent,
+                                ),
                               ),
-                            if (valorRetidoContestacao > 0 && multasPendentes > 0)
-                              const SizedBox(width: 10),
+                            if (valorRetido > 0 && multasPendentes > 0) const SizedBox(width: 10),
                             if (multasPendentes > 0)
                               Expanded(
-                                child: _cardStatusEspecial("MULTAS PENDENTES", multasPendentes, Icons.gavel_rounded, Colors.redAccent),
+                                child: _cardStatusEspecial(
+                                  "MULTAS PENDENTES",
+                                  multasPendentes,
+                                  Icons.gavel_rounded,
+                                  Colors.redAccent,
+                                ),
                               ),
                           ],
                         ),
                       ),
-
                     const Text(
-                      "Movimentações", 
+                      "Movimentações",
                       style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 12),
-
                     _buildFiltros(),
                     const SizedBox(height: 16),
-
-                    if (documentosAtuais.isEmpty) _buildEmptyState(), 
-
-                    ...documentosAtuais.map((doc) {
-                      final item = doc.data() as Map<String, dynamic>;
+                    if (docs.isEmpty) _buildEmptyState(),
+                    ...docs.map((doc) {
+                      final item = Map<String, dynamic>.from(doc.data() as Map);
+                      item['id'] = doc.id;
                       return _buildItemHistoricoGoleiro(item, primaryColor);
                     }),
                   ],
@@ -417,8 +508,9 @@ class _AbaCarteiraState extends State<AbaCarteira> {
     );
   }
 
-  // --- WIDGETS DE SUPORTE ---
-
+  // ---------------------------------------------------------------------------
+  // WIDGETS
+  // ---------------------------------------------------------------------------
   Widget _buildFiltros() {
     return Row(
       children: [
@@ -432,20 +524,20 @@ class _AbaCarteiraState extends State<AbaCarteira> {
   }
 
   Widget _chipFiltro(String titulo) {
-    bool isSelected = _filtroAtual == titulo;
+    final bool ativo = _filtroAtual == titulo;
     return GestureDetector(
       onTap: () => setState(() => _filtroAtual = titulo),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? primaryColor : Colors.transparent,
+          color: ativo ? primaryColor : const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isSelected ? primaryColor : Colors.white24),
+          border: Border.all(color: ativo ? primaryColor : Colors.white12),
         ),
         child: Text(
           titulo,
           style: TextStyle(
-            color: isSelected ? Colors.black : Colors.white54,
+            color: ativo ? Colors.black : Colors.white70,
             fontWeight: FontWeight.bold,
             fontSize: 12,
           ),
@@ -454,15 +546,22 @@ class _AbaCarteiraState extends State<AbaCarteira> {
     );
   }
 
-  Widget _cardSaldoGoleiro(BuildContext context, String uid, double saldoLiquido, double saldoBruto, double multas, Color primary, Map<String, dynamic> userDados) {
-    bool temSaldoParaSaque = saldoLiquido > 0;
+  Widget _cardSaldoGoleiro(
+    BuildContext context,
+    String uid,
+    double saldoLiquido,
+    double saldoBruto,
+    double multas,
+    Color primary,
+  ) {
+    final bool temSaldoParaSaque = saldoLiquido > 0;
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        color: const Color(0xFF0D1F14), 
+        color: const Color(0xFF0D1F14),
         border: Border.all(color: const Color(0xFF1A3324)),
       ),
       child: Column(
@@ -473,7 +572,12 @@ class _AbaCarteiraState extends State<AbaCarteira> {
             children: [
               Text(
                 "DISPONÍVEL PARA SAQUE",
-                style: TextStyle(color: primary, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.0),
+                style: TextStyle(
+                  color: primary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                ),
               ),
               Icon(Icons.account_balance_wallet_outlined, color: primary, size: 18),
             ],
@@ -483,25 +587,33 @@ class _AbaCarteiraState extends State<AbaCarteira> {
             "R\$ ${saldoLiquido.toStringAsFixed(2)}",
             style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900),
           ),
-          
           if (multas > 0) ...[
             const SizedBox(height: 4),
             Text(
-              "Saldo Bruto: R\$ ${saldoBruto.toStringAsFixed(2)} | Descontos: R\$ ${multas.toStringAsFixed(2)}",
+              "Saldo em conta: R\$ ${saldoBruto.toStringAsFixed(2)} | Multas: R\$ ${multas.toStringAsFixed(2)}",
               style: const TextStyle(color: Colors.white54, fontSize: 11),
-            )
+            ),
           ],
-
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             height: 38,
             child: ElevatedButton.icon(
-              onPressed: temSaldoParaSaque ? () => _iniciarFluxoSaque(context, uid, saldoLiquido, primary, userDados) : null,
-              icon: Icon(Icons.arrow_upward_rounded, size: 16, color: temSaldoParaSaque ? Colors.black : const Color(0xFF555555)),
+              onPressed: temSaldoParaSaque
+                  ? () => _iniciarFluxoSaque(context, uid, saldoLiquido, primary)
+                  : null,
+              icon: Icon(
+                Icons.arrow_upward_rounded,
+                size: 16,
+                color: temSaldoParaSaque ? Colors.black : const Color(0xFF555555),
+              ),
               label: Text(
                 "SOLICITAR SAQUE",
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: temSaldoParaSaque ? Colors.black : const Color(0xFF555555)),
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 11,
+                  color: temSaldoParaSaque ? Colors.black : const Color(0xFF555555),
+                ),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: primary,
@@ -520,7 +632,7 @@ class _AbaCarteiraState extends State<AbaCarteira> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E), 
+        color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(15),
         border: Border.all(color: cor.withAlpha(50)),
       ),
@@ -535,76 +647,99 @@ class _AbaCarteiraState extends State<AbaCarteira> {
             ],
           ),
           const SizedBox(height: 5),
-          Text("R\$ ${valor.toStringAsFixed(2)}", style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          Text(
+            "R\$ ${valor.toStringAsFixed(2)}",
+            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+          ),
         ],
       ),
     );
   }
 
-  // 🟢 EXTRATO INTERATIVO ALTO CONTRASTE (Com clique para recibo)
   Widget _buildItemHistoricoGoleiro(Map<String, dynamic> item, Color primaryColor) {
-    final String tipo = item['tipo'] ?? '';
-    final String categoria = item['categoria'] ?? '';
-    final String status = item['status'] ?? 'concluido';
-    final double valor = double.tryParse(item['valor']?.toString() ?? '0') ?? 0.0;
-
+    final String tipo = (item['tipo'] ?? '').toString();
+    final int centavos = _centavosDe(item);
+    final double valor = Dinheiro.paraReal(centavos);
     final String valorFormatado = valor.toStringAsFixed(2).replaceAll('.', ',');
 
-    String local = item['descricao'] ?? 'Transação';
-    
-    // 🟢 CORREÇÃO DA HORA: Lê a hora do pagamento/recusa, se não tiver, lê a hora da solicitação
-    final DateTime data = (item['dataAtualizacao'] as Timestamp?)?.toDate() ?? (item['data'] as Timestamp?)?.toDate() ?? DateTime.now();
+    String local = (item['descricao'] ?? 'Transação').toString();
+    final DateTime data = (item['criadoEm'] as Timestamp?)?.toDate() ??
+        (item['data'] as Timestamp?)?.toDate() ??
+        DateTime.now();
 
-    bool isSaida = tipo == 'saida' || categoria == 'saque';
+    bool isSaida = _isSaida(tipo);
     String prefix = isSaida ? "-" : "+";
     Color color = isSaida ? Colors.redAccent : primaryColor;
     IconData icon = isSaida ? Icons.account_balance_wallet_outlined : Icons.sports_soccer_outlined;
-    String textoBadge = isSaida ? "SAQUE" : "RECEBIMENTO";
+    String textoBadge = isSaida ? "SAÍDA" : "ENTRADA";
 
-    if (tipo == 'multa_desistencia' || tipo == 'pagamento_multa') {
-      color = Colors.orangeAccent;
-      icon = Icons.warning_amber_rounded;
-      prefix = "-";
-      textoBadge = "MULTA";
-    }
-
-    // 🟢 CORREÇÃO DOS STATUS DE SAQUE
-    if (categoria == 'saque') {
-      if (status == 'pendente') {
-        textoBadge = "PROCESSANDO";
+    switch (tipo) {
+      case 'recebimento_jogo':
+      case 'recebimento':
+        textoBadge = "RECEBIMENTO";
+        color = primaryColor;
+        icon = Icons.sports_soccer_outlined;
+        prefix = "+";
+        break;
+      case 'saque_solicitado':
+        textoBadge = "SAQUE";
         color = Colors.amber;
         icon = Icons.access_time_rounded;
-      } else if (status == 'recusado') {
-        textoBadge = "RECUSADO";
-        color = Colors.redAccent;
-        icon = Icons.cancel_outlined;
-        local = "Saque recusado (Estornado)";
-      } else if (status == 'pago') {
-        textoBadge = "EFETUADO";
-        color = primaryColor; // Fica verde para dar a sensação de dinheiro no bolso!
+        prefix = "-";
+        break;
+      case 'saque_pago':
+        textoBadge = "SAQUE PAGO";
+        color = primaryColor;
         icon = Icons.check_circle_outline;
+        prefix = "-";
         local = "Saque efetuado na conta";
-      }
-    } else {
-      // Outros status genéricos
-      if (status == 'contestado') {
-        textoBadge = "BLOQUEADO";
+        break;
+      case 'saque_recusado':
+        textoBadge = "ESTORNO SAQUE";
         color = Colors.orangeAccent;
-        icon = Icons.lock_outline;
-      }
+        icon = Icons.undo_rounded;
+        prefix = "+";
+        local = "Saque recusado (estornado)";
+        break;
+      case 'multa_desistencia':
+      case 'abatimento_multa':
+        textoBadge = "MULTA";
+        color = Colors.orangeAccent;
+        icon = Icons.warning_amber_rounded;
+        prefix = "-";
+        break;
+      case 'estorno_contestacao':
+        textoBadge = "ESTORNO";
+        color = primaryColor;
+        icon = Icons.undo_rounded;
+        prefix = "+";
+        break;
+      case 'recarga':
+        textoBadge = "RECARGA";
+        color = primaryColor;
+        icon = Icons.add_circle_outline;
+        prefix = "+";
+        break;
+      case 'pagamento_jogo':
+        textoBadge = "PAGAMENTO";
+        color = Colors.redAccent;
+        icon = Icons.payment;
+        prefix = "-";
+        break;
     }
 
-    String dataFormatada = "${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')} às ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}";
+    final dataFormatada =
+        "${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')} às ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}";
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       child: InkWell(
-        onTap: () => _mostrarDetalhesTransacao(item, color, prefix, textoBadge, local), // Passamos o local atualizado!
+        onTap: () => _mostrarDetalhesTransacao(item, color, prefix, textoBadge, local),
         borderRadius: BorderRadius.circular(16),
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFF161616), 
+            color: const Color(0xFF161616),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: color.withAlpha(20)),
           ),
@@ -622,14 +757,19 @@ class _AbaCarteiraState extends State<AbaCarteira> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      textoBadge, 
-                      style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 0.5),
+                      textoBadge,
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11,
+                        letterSpacing: 0.5,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      local, 
-                      style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.2), 
-                      maxLines: 1, 
+                      local,
+                      style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.2),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
@@ -639,7 +779,7 @@ class _AbaCarteiraState extends State<AbaCarteira> {
               ),
               const SizedBox(width: 8),
               Text(
-                "$prefix R\$ $valorFormatado", 
+                "$prefix R\$ $valorFormatado",
                 style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16),
               ),
             ],
@@ -658,20 +798,20 @@ class _AbaCarteiraState extends State<AbaCarteira> {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Colors.white.withAlpha(8), 
+              color: Colors.white.withAlpha(8),
               shape: BoxShape.circle,
             ),
             child: Icon(
               Icons.history_toggle_off_rounded,
               size: 60,
-              color: Colors.white.withAlpha(26), 
+              color: Colors.white.withAlpha(26),
             ),
           ),
           const SizedBox(height: 16),
           Text(
             _filtroAtual == 'Tudo' ? "NENHUMA MOVIMENTAÇÃO" : "NENHUM REGISTRO",
             style: TextStyle(
-              color: Colors.white.withAlpha(51), 
+              color: Colors.white.withAlpha(51),
               fontSize: 14,
               fontWeight: FontWeight.w900,
               letterSpacing: 1.5,
@@ -679,11 +819,11 @@ class _AbaCarteiraState extends State<AbaCarteira> {
           ),
           const SizedBox(height: 8),
           Text(
-            _filtroAtual == 'Tudo' 
-              ? "Suas entradas e saídas aparecerão aqui." 
-              : "Não há dados para o filtro selecionado.",
+            _filtroAtual == 'Tudo'
+                ? "Suas entradas e saídas aparecerão aqui."
+                : "Não há dados para o filtro selecionado.",
             style: TextStyle(
-              color: Colors.white.withAlpha(26), 
+              color: Colors.white.withAlpha(26),
               fontSize: 12,
             ),
           ),

@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import 'package:defendepramim/ui/screens/convocacao/tela_criar_jogo.dart';
 import 'package:defendepramim/services/push_notification_service.dart';
 import 'package:defendepramim/services/notificacao_service.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:defendepramim/ui/widgets/modal_avaliacao_goleiro.dart';
-import 'package:defendepramim/ui/screens/tela_chat_jogo.dart'; 
+import 'package:defendepramim/ui/screens/tela_chat_jogo.dart';
 import 'package:defendepramim/ui/widgets/modal_perfil_publico.dart';
 
 class CardJogoContratante extends StatefulWidget {
@@ -43,73 +45,10 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     });
   }
 
+  /// Expiração + estorno são feitos pelo job servidor `expirarJogosAbertos`.
+  /// O cliente NÃO mexe em saldo. Só atualiza UI via stream do jogo.
   Future<void> _verificarEProcessarExpiracao() async {
-    final status = widget.jogo['status'] ?? 'aberto';
-    if (status != 'aberto') return; 
-
-    final Timestamp? dtTimestamp = widget.jogo['dataHora'] as Timestamp?;
-    if (dtTimestamp == null) return;
-
-    final dt = dtTimestamp.toDate();
-    final agora = _obterHoraRealAgora();
-
-    if (agora.isAfter(dt)) {
-      final String? idJogo = widget.jogo['id'];
-      final String? idContratante = widget.jogo['idContratante'];
-      final double valorTotal = (widget.jogo['valor'] ?? 0.0).toDouble();
-
-      if (idJogo == null || idContratante == null || valorTotal <= 0) return;
-
-      try {
-        await FirebaseFirestore.instance.runTransaction((transaction) async {
-          DocumentReference jogoRef = FirebaseFirestore.instance.collection("jogos").doc(idJogo);
-          DocumentReference userRef = FirebaseFirestore.instance.collection("usuarios").doc(idContratante);
-
-          DocumentSnapshot jogoSnap = await transaction.get(jogoRef);
-          if (!jogoSnap.exists || jogoSnap.get('status') != 'aberto') return; 
-
-          transaction.update(jogoRef, {
-            "status": "expirado",
-            "motivoCancelamento": "O horário passou e nenhum goleiro aceitou a convocação.",
-            "expiradoEm": FieldValue.serverTimestamp(),
-            "valorEstornado": valorTotal,
-          });
-
-          transaction.update(userRef, {
-            "saldo": FieldValue.increment(valorTotal),
-          });
-
-          // 1. Extrato particular do Contratante
-          DocumentReference extratoReembolso = userRef.collection('extrato').doc();
-          transaction.set(extratoReembolso, {
-            "id": extratoReembolso.id,
-            "idUsuario": idContratante,
-            "tipo": "estorno",
-            "valor": valorTotal,
-            "status": "concluido",
-            "descricao": "Estorno: Expirou sem goleiro (${widget.jogo['local']})",
-            "data": FieldValue.serverTimestamp(),
-            "idJogo": idJogo,
-          });
-
-          // 🟢 2. Livro-Caixa Global do Admin (Estorno Expirado)
-          DocumentReference transacaoGlobal = FirebaseFirestore.instance.collection('transacoes').doc();
-          transaction.set(transacaoGlobal, {
-            "idUsuario": idContratante,
-            "tipo": "estorno",
-            "valor": valorTotal,
-            "status": "concluido",
-            "descricao": "Estorno: Expirou sem goleiro",
-            "data": FieldValue.serverTimestamp(),
-            "idJogo": idJogo,
-          });
-        });
-
-        debugPrint("Jogo $idJogo expirou. Saldo de R\$ $valorTotal estornado com sucesso!");
-      } catch (e) {
-        debugPrint("Erro ao processar estorno de jogo expirado: $e");
-      }
-    }
+    // no-op financeiro — servidor é a fonte da verdade
   }
 
   Future<void> _sincronizarRelogio() async {
@@ -294,8 +233,9 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     }
   }
 
+  /// Pagamento ao goleiro — só no servidor (finalizarJogoContratante).
   Future<void> _pagarGoleiro() async {
-    if (_isLoading) return; 
+    if (_isLoading) return;
 
     final idGoleiro = widget.jogo['idGoleiro'];
     final idJogo = widget.jogo['id'];
@@ -308,69 +248,28 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     setState(() => _isLoading = true);
 
     try {
-      double valorTotal = (widget.jogo['valor'] ?? 0.0).toDouble();
-      double valorGoleiro = 0.0;
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('finalizarJogoContratante');
 
-      if (widget.jogo['valorGoleiro'] != null) {
-        valorGoleiro = (widget.jogo['valorGoleiro'] as num).toDouble();
-      } else {
-        final configDoc = await FirebaseFirestore.instance.collection('configuracoes').doc('global').get();
-        double taxaApp = 7.0; 
-        if (configDoc.exists) {
-          String nivel = (widget.jogo['nivel'] ?? '').toString().toLowerCase(); 
-          if (nivel.contains('elite')) { taxaApp = (configDoc.data()?['taxaAppElite'] ?? 9).toDouble(); }
-          else if (nivel.contains('inter')) { taxaApp = (configDoc.data()?['taxaAppInter'] ?? 8).toDouble(); }
-          else { taxaApp = (configDoc.data()?['taxaAppVarzea'] ?? 7).toDouble(); }
-        }
-        valorGoleiro = (valorTotal - taxaApp).clamp(0, 9999).toDouble();
-      }
-
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        DocumentReference jogoRef = FirebaseFirestore.instance.collection("jogos").doc(idJogo);
-        DocumentReference goleiroRef = FirebaseFirestore.instance.collection("usuarios").doc(idGoleiro);
-        DocumentReference contratanteRef = FirebaseFirestore.instance.collection("usuarios").doc(widget.jogo['idContratante']);
-
-        DocumentSnapshot jogoSnap = await transaction.get(jogoRef);
-        if (!jogoSnap.exists) throw "Jogo não encontrado";
-        if (jogoSnap.get('status') == 'finalizado' || jogoSnap.get('status') == 'contestado') {
-           throw "Transação duplicada"; 
-        }
-
-        transaction.update(jogoRef, {"status": "finalizado", "pagoEm": FieldValue.serverTimestamp(), "valorPagoAoGoleiro": valorGoleiro});
-        transaction.update(goleiroRef, {"saldo": FieldValue.increment(valorGoleiro), "totalGanhos": FieldValue.increment(valorGoleiro), "atuadas": FieldValue.increment(1)});
-        transaction.update(contratanteRef, {"jogosRealizados": FieldValue.increment(1), "partidasOrganizadas": FieldValue.increment(1), "totalGastos": FieldValue.increment(valorTotal)});
-
-        // 1. Extrato particular do Goleiro
-        DocumentReference extratoGoleiro = goleiroRef.collection('extrato').doc();
-        transaction.set(extratoGoleiro, {
-          "id": extratoGoleiro.id, "tipo": "recebimento", "valor": valorGoleiro, "data": FieldValue.serverTimestamp(),
-          "descricao": "Pelada: ${widget.jogo['local']}", "idJogo": idJogo, "status": "concluido",
-        });
-
-        // 🟢 2. Livro-Caixa Global do Admin (Pagamento Manual)
-        DocumentReference transacaoGlobal = FirebaseFirestore.instance.collection('transacoes').doc();
-        transaction.set(transacaoGlobal, {
-          "id": transacaoGlobal.id, "idUsuario": idGoleiro, "tipo": "recebimento", "valor": valorGoleiro, 
-          "data": FieldValue.serverTimestamp(), "descricao": "Pagamento pela partida (${widget.jogo['local']})", 
-          "idJogo": idJogo, "status": "concluido",
-        });
+      final result = await callable.call({
+        'idJogo': idJogo,
+        'idempotencyKey': const Uuid().v4(),
       });
 
-      _showSnackBar("Pagamento liberado! O goleiro recebeu R\$ ${valorGoleiro.toStringAsFixed(2)}", cor: Colors.green);
-      final localFormatado = (widget.jogo['local'] ?? '').toString().split('(')[0].trim();
-      final valorFormatado = valorGoleiro.toStringAsFixed(2).replaceAll('.', ',');
+      final data = result.data;
+      int pagoCentavos = 0;
+      if (data is Map && data['valorPagoCentavos'] != null) {
+        pagoCentavos = (data['valorPagoCentavos'] as num).round();
+      }
 
-      await NotificacaoService().enviarNotificacao(
-        idUsuarioDestino: idGoleiro, titulo: "Pagamento Liberado! 💰",
-        mensagem: "Boa defesa! R\$ $valorFormatado do jogo em $localFormatado já estão na sua carteira.", tipo: 'pagamento',
-      );
+      final valorFmt = (pagoCentavos / 100).toStringAsFixed(2).replaceAll('.', ',');
+      _showSnackBar("Pagamento liberado! O goleiro recebeu R\$ $valorFmt", cor: Colors.green);
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint("Erro no pagamento: $e");
+      _showSnackBar(e.message ?? "Erro ao processar pagamento.", cor: Colors.red);
     } catch (e) {
       debugPrint("Erro no pagamento: $e");
-      if (e.toString().contains("Transação duplicada")) {
-         _showSnackBar("Este jogo já foi pago ou contestado.", cor: Colors.orange);
-      } else {
-         _showSnackBar("Erro ao processar transação financeira.", cor: Colors.red);
-      }
+      _showSnackBar("Erro ao processar transação financeira.", cor: Colors.red);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -437,64 +336,45 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     final resultado = await _dialogConfirmarCancelamento(multa, valorEstorno);
     if (resultado == null || resultado['confirmado'] != true) return;
 
-    final String motivoFinal = resultado['motivo'];
+    final String motivoFinal = resultado['motivo']?.toString() ?? "Cancelado pelo contratante";
     setState(() => _isLoading = true);
 
     try {
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        DocumentReference jogoRef = FirebaseFirestore.instance.collection("jogos").doc(widget.jogo['id']);
-        DocumentReference userRef = FirebaseFirestore.instance.collection("usuarios").doc(uid);
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('cancelarJogoContratante');
 
-        transaction.update(jogoRef, {
-          "status": "cancelado", "canceladoEm": FieldValue.serverTimestamp(), "canceladoPor": "contratante",
-          "motivoCancelamento": motivoFinal, "multaRetida": multa, "valorEstornado": valorEstorno,
-        });
-        transaction.update(userRef, {"saldo": FieldValue.increment(valorEstorno), "qtdDesistencias": FieldValue.increment(1), "cancelamentos": FieldValue.increment(1)});
-
-        // Extrato particular do estorno
-        DocumentReference extratoReembolso = userRef.collection('extrato').doc();
-        transaction.set(extratoReembolso, {
-          "id": extratoReembolso.id, "idUsuario": uid, "tipo": "estorno", "valor": valorEstorno, "status": "concluido",
-          "descricao": multa > 0 ? "Reembolso Parcial (${widget.jogo['local']})" : "Reembolso Integral (${widget.jogo['local']})",
-          "data": FieldValue.serverTimestamp(), "idJogo": widget.jogo['id'],
-        });
-
-        // 🟢 Livro-Caixa Global (Estorno)
-        DocumentReference globalReembolso = FirebaseFirestore.instance.collection('transacoes').doc();
-        transaction.set(globalReembolso, {
-          "idUsuario": uid, "tipo": "estorno", "valor": valorEstorno, "status": "concluido",
-          "descricao": multa > 0 ? "Reembolso Parcial (${widget.jogo['local']})" : "Reembolso Integral (${widget.jogo['local']})",
-          "data": FieldValue.serverTimestamp(), "idJogo": widget.jogo['id'],
-        });
-
-        if (multa > 0) {
-          // Extrato particular da multa
-          DocumentReference extratoMulta = userRef.collection('extrato').doc();
-          transaction.set(extratoMulta, {
-            "id": extratoMulta.id, "idUsuario": uid, "tipo": "multa_cancelamento", "status": "concluido", "valor": multa,
-            "descricao": "Taxa de cancelamento (< ${horasRegraMulta}h)\n${widget.jogo['local']}",
-            "data": FieldValue.serverTimestamp(), "idJogo": widget.jogo['id'],
-          });
-          
-          // 🟢 Livro-Caixa Global (Multa retida pela plataforma)
-          DocumentReference globalMulta = FirebaseFirestore.instance.collection('transacoes').doc();
-          transaction.set(globalMulta, {
-            "idUsuario": uid, "tipo": "multa_cancelamento", "status": "concluido", "valor": multa,
-            "descricao": "Taxa de cancelamento (< ${horasRegraMulta}h)",
-            "data": FieldValue.serverTimestamp(), "idJogo": widget.jogo['id'],
-          });
-        }
+      final result = await callable.call({
+        'idJogo': widget.jogo['id'],
+        'motivo': motivoFinal,
+        'idempotencyKey': const Uuid().v4(),
       });
 
-      _showSnackBar("Partida cancelada e saldo estornado.", cor: Colors.green);
-      final String idGoleiro = widget.jogo['idGoleiro'] ?? '';
-      if (idGoleiro.isNotEmpty) {
-        final localFormatado = (widget.jogo['local'] ?? '').toString().split('(')[0].trim();
-        await NotificacaoService().enviarNotificacao(
-          idUsuarioDestino: idGoleiro, titulo: "Jogo Cancelado 🚫",
-          mensagem: "Infelizmente o contratante cancelou a partida em $localFormatado. A sua agenda foi liberada.", tipo: 'cancelou_jogo',
+      final data = result.data;
+      int estornoCentavos = 0;
+      int multaCentavos = 0;
+      if (data is Map) {
+        if (data['estornoCentavos'] != null) {
+          estornoCentavos = (data['estornoCentavos'] as num).round();
+        }
+        if (data['multaCentavos'] != null) {
+          multaCentavos = (data['multaCentavos'] as num).round();
+        }
+      }
+
+      if (multaCentavos > 0) {
+        _showSnackBar(
+          "Cancelado. Estorno R\$ ${(estornoCentavos / 100).toStringAsFixed(2)} (multa R\$ ${(multaCentavos / 100).toStringAsFixed(2)}).",
+          cor: Colors.orange,
+        );
+      } else {
+        _showSnackBar(
+          "Partida cancelada. Estorno de R\$ ${(estornoCentavos / 100).toStringAsFixed(2)}.",
+          cor: Colors.green,
         );
       }
+      // Push ao goleiro é feito pelo servidor
+    } on FirebaseFunctionsException catch (e) {
+      _showSnackBar(e.message ?? "Erro ao processar cancelamento.", cor: Colors.red);
     } catch (e) {
       _showSnackBar("Erro ao processar cancelamento. Tente novamente.", cor: Colors.red);
     } finally {
@@ -576,7 +456,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
             Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10))),
             const SizedBox(height: 15),
 
-            // 🔒 REGRA DE OURO APLICADA AQUI:
             if (!jaIniciou && status == 'aberto')
               ListTile(
                 leading: const Icon(Icons.edit, color: Colors.blue),
@@ -627,25 +506,46 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
     );
   }
 
-  // 👇 AQUI A LÓGICA DO CHAT E TODA A INTERFACE DO CARD
-  Widget _buildHeaderGoleiro(String status, Color cor, bool jaTerminou) {
+  Widget _buildHeaderGoleiro(
+    String status,
+    Color cor,
+    bool jaTerminou, {
+    bool expirouPrazo = false,
+    int? notaGoleiro,
+    bool finalizadoAutomaticamente = false,
+  }) {
     String texto = "";
     Color corFundo = cor.withAlpha(15);
     Widget leadingIcon = Icon(Icons.info_outline, color: cor, size: 18);
 
     if (status == 'fechado' && !jaTerminou) {
       texto = "Goleiro confirmado para a pelada!";
+    } else if (status == 'fechado' && jaTerminou && expirouPrazo) {
+      // Prazo passou: job rotinaPagamentoAutomatico já deve ter pago (ou está a processar)
+      texto = "Prazo encerrado · pagamento automático em andamento";
+      leadingIcon = Icon(Icons.sync, color: cor, size: 18);
     } else if (status == 'fechado' && jaTerminou) {
       texto = "Partida encerrada. Libere o pagamento.";
     } else if (status == 'aberto') {
       if (jaTerminou) {
-        texto = "Processando estorno...";
+        // Job servidor (expirarJogosAbertos) ainda não processou — até ~15 min
+        texto = "Aguardando estorno automático...";
       } else {
         texto = "Buscando goleiro na região...";
       }
-      leadingIcon = const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.orangeAccent, strokeWidth: 2));
+      leadingIcon = const SizedBox(
+        width: 14,
+        height: 14,
+        child: CircularProgressIndicator(color: Colors.orangeAccent, strokeWidth: 2),
+      );
     } else if (status == 'finalizado') {
-      texto = "Pagamento liberado com sucesso";
+      if (notaGoleiro == null) {
+        texto = finalizadoAutomaticamente
+            ? "Pagamento liberado automaticamente · avalie o goleiro"
+            : "Pagamento liberado · avalie o goleiro";
+      } else {
+        texto = "Pagamento liberado com sucesso";
+      }
       leadingIcon = Icon(Icons.check_circle, color: cor, size: 18);
     } else if (status == 'cancelado') {
       texto = "Partida cancelada";
@@ -654,7 +554,12 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
       texto = "Partida em disputa no suporte";
       leadingIcon = Icon(Icons.warning_rounded, color: cor, size: 18);
     } else if (status == 'expirado') {
-      texto = "Expirou sem goleiro";
+      final int? estornoC = (widget.jogo['valorEstornadoCentavos'] as num?)?.round();
+      if (estornoC != null && estornoC > 0) {
+        texto = "Expirou sem goleiro · estorno R\$ ${(estornoC / 100).toStringAsFixed(2)}";
+      } else {
+        texto = "Expirou sem goleiro · valor estornado";
+      }
       leadingIcon = Icon(Icons.timer_off, color: cor, size: 18);
     }
 
@@ -680,18 +585,16 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
             decoration: BoxDecoration(color: corFundo),
             child: Row(
               children: [
-              // 🟢 FOTO CLICÁVEL COM O MINI-PERFIL INTELIGENTE
               InkWell(
                   onTap: () {
                     ModalPerfilPublico.mostrar(
                       context,
-                      uid: idGoleiro, // Manda só o ID!
+                      uid: idGoleiro, 
                       isGoleiro: true, 
                     );
                   },
                   borderRadius: BorderRadius.circular(14),
                   child: CircleAvatar(
-                    // ... mantém o resto igual
                     radius: 14,
                     backgroundColor: cor.withAlpha(40),
                     backgroundImage: fotoUrl != null && fotoUrl.isNotEmpty ? NetworkImage(fotoUrl) : null,
@@ -710,7 +613,6 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                   ),
                 ),
                 
-                // 🚀 BOTÃO DE CHAT (Mantido igualzinho ao seu)
                 if (status == 'fechado' || status == 'finalizado' || status == 'contestado')
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -832,14 +734,25 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
 
     final dynamic notaRaw = widget.jogo['avaliacaoGoleiro'];
     final int? notaGoleiro = notaRaw is num ? notaRaw.toInt() : null;
+    final bool finalizadoAutomaticamente = widget.jogo['finalizadoAutomaticamente'] == true;
 
-    final bool aguardandoAvaliacao = (status == 'fechado' && jaTerminou && !expirouPrazo) || (status == 'finalizado' && notaGoleiro == null);
+    // Botão de pagar: só enquanto o prazo manual ainda está aberto.
+    // Depois do prazo / status finalizado: no máximo "avaliar" (pagamento já saiu ou sai pelo job).
+    final bool podeAvaliarEPagar = status == 'fechado' && jaTerminou && !expirouPrazo;
+    final bool podeAvaliarSo = status == 'finalizado' && notaGoleiro == null;
+    final bool aguardandoAvaliacao = podeAvaliarEPagar || podeAvaliarSo;
     final bool jaAvaliou = status == 'finalizado' && notaGoleiro != null;
 
     String localFull = widget.jogo['local']?.toString() ?? 'Local não informado';
+
+    // 🚀 Lógica Polida: Trata strings bizarras legadas e impede overflow
     String nomeArena = localFull;
     String enderecoArena = '';
-    if (localFull.contains('(')) {
+
+    if (localFull.startsWith('{resultado')) {
+      nomeArena = "Partida a definir";
+      enderecoArena = "Aguardando atualização do local";
+    } else if (localFull.contains('(')) {
       var parts = localFull.split('(');
       nomeArena = parts[0].trim();
       enderecoArena = parts.length > 1 ? parts[1].replaceAll(')', '').trim() : '';
@@ -863,7 +776,14 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(height: 4, width: double.infinity, color: corStatus),
-              _buildHeaderGoleiro(status, corStatus, jaTerminou),
+              _buildHeaderGoleiro(
+                status,
+                corStatus,
+                jaTerminou,
+                expirouPrazo: expirouPrazo,
+                notaGoleiro: notaGoleiro,
+                finalizadoAutomaticamente: finalizadoAutomaticamente,
+              ),
               
               Padding(
                 padding: const EdgeInsets.all(16),
@@ -883,13 +803,24 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                           ),
                         ),
                         const SizedBox(width: 12),
+                        // 🚀 Flexible no Nome da Arena para evitar estouro horizontal
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(nomeArena.toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: -0.5), maxLines: 1, overflow: TextOverflow.ellipsis),
+                              Text(
+                                nomeArena.toUpperCase(), 
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: -0.5), 
+                                maxLines: 1, 
+                                overflow: TextOverflow.ellipsis,
+                              ),
                               const SizedBox(height: 4),
-                              Text(enderecoArena.isNotEmpty ? enderecoArena : "Endereço não detalhado", style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.2), maxLines: 2, overflow: TextOverflow.ellipsis),
+                              Text(
+                                enderecoArena.isNotEmpty ? enderecoArena : "Endereço não detalhado", 
+                                style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.2), 
+                                maxLines: 2, 
+                                overflow: TextOverflow.ellipsis,
+                              ),
                               
                               if (obs.isNotEmpty)
                                 Padding(
@@ -919,7 +850,11 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        Text("R\$ $valorFormatado", style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.w900, fontSize: 20)),
+                        // Preço protegido
+                        Text(
+                          "R\$ $valorFormatado", 
+                          style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.w900, fontSize: 20),
+                        ),
                       ],
                     ),
 
@@ -933,9 +868,10 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              _buildInfoItem(Icons.calendar_today_outlined, dataExibicao),
-                              _buildInfoItem(Icons.access_time, horaExibicao),
-                              _buildInfoItem(Icons.timer_outlined, "${duracao}m"),
+                              // 🚀 Flexible Aplicado a todas as variáveis
+                              Flexible(child: _buildInfoItem(Icons.calendar_today_outlined, dataExibicao)),
+                              Flexible(child: _buildInfoItem(Icons.access_time, horaExibicao)),
+                              Flexible(child: _buildInfoItem(Icons.timer_outlined, "${duracao}m")),
                             ],
                           ),
                           const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Divider(color: Colors.white10, height: 1, thickness: 1)),
@@ -977,7 +913,8 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.star_rounded, color: Colors.black, size: 24),
                       label: Text(
-                        status == 'finalizado' ? "AVALIAR GOLEIRO" : "AVALIAR E LIBERAR PAGAMENTO", 
+                        // Após prazo ou já finalizado pelo job: só avaliar — pagamento já liberado
+                        podeAvaliarSo ? "AVALIAR GOLEIRO" : "AVALIAR E LIBERAR PAGAMENTO",
                         style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, letterSpacing: 0.5, fontSize: 13)
                       ),
                       style: ElevatedButton.styleFrom(
@@ -998,7 +935,7 @@ class _CardJogoContratanteState extends State<CardJogoContratante> {
                     children: [
                       const Text("Sua avaliação: ", style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold)),
                       ...List.generate(5, (index) => Icon(
-                        index < notaGoleiro ? Icons.star_rounded : Icons.star_border_rounded,
+                        index < (notaGoleiro ?? 0) ? Icons.star_rounded : Icons.star_border_rounded,
                         color: Colors.amber, size: 20,
                       )),
                     ],

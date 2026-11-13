@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../services/auth_provider.dart';
 import 'home_goleiro.dart';
 import 'home_contratante.dart';
-import 'cadastro_screen.dart'; // Certifique-se de que o import da sua tela de cadastro está correto
+import 'cadastro_screen.dart'; 
 import 'initial_screen.dart'; 
 
 class AuthCheck extends ConsumerWidget {
@@ -16,59 +17,52 @@ class AuthCheck extends ConsumerWidget {
 
     return authState.when(
       data: (user) {
-        // 🚪 Se não há usuário logado, vai para a tela de boas-vindas/login
+        // 🚪 Se não há usuário logado, vai para a tela inicial
         if (user == null) return const InitialScreen();
 
-        // 🔍 Se está logado, vamos observar o PERFIL no Firestore (Stream)
-        final perfilAsync = ref.watch(userProfileProvider);
-
-        return perfilAsync.when(
-          data: (perfil) {
-            // 📝 CASO 1: O usuário existe no Auth, mas NÃO tem documento no Firestore
-            // Isso acontece se ele fechou o app no meio do cadastro.
-            if (perfil == null) {
-              return const TelaCadastro(); 
+        // 🚀 BLINDAGEM MÁXIMA: Lemos direto da base de dados (Stream) sem intermediários!
+        // Isto ignora qualquer valor por defeito que os Models do Riverpod possam estar a aplicar.
+        return StreamBuilder(
+          stream: FirebaseFirestore.instance.collection('usuarios').doc(user.uid).snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Scaffold(
+                backgroundColor: Colors.black,
+                body: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+              );
             }
 
-            // ⚡ CASO 2: Perfil encontrado! Direciona para a Home correta.
-            // Usei .toLowerCase() para evitar erros de digitação (Ex: 'Goleiro' vs 'goleiro')
-            if (perfil.tipoPerfil.toLowerCase() == 'goleiro') {
+            final doc = snapshot.data;
+            
+            // O documento ainda nem existe
+            if (doc == null || !doc.exists) {
+              return TelaCadastro(googleUser: user); 
+            }
+
+            final dados = doc.data() as Map?;
+            if (dados == null) return TelaCadastro(googleUser: user);
+
+            // Verificamos exatamente o que está guardado no Firestore
+            final temCpf = dados['cpf'] != null && dados['cpf'].toString().trim().isNotEmpty;
+            final tipoPerfil = (dados['tipoPerfil'] ?? '').toString().trim().toLowerCase();
+            final temTelefone = dados['telefone'] != null && dados['telefone'].toString().trim().isNotEmpty;
+
+            // Se o servidor só criou a base da carteira e faltam os dados vitais:
+            if (!temCpf || tipoPerfil.isEmpty || !temTelefone) {
+              return TelaCadastro(googleUser: user);
+            }
+
+            // Tudo preenchido de verdade! Roteamento final:
+            if (tipoPerfil == 'goleiro') {
               return const HomeGoleiro();
             } else {
               return const HomeContratante();
             }
           },
-          // ⏳ Enquanto o Firestore busca os dados (milissegundos iniciais)
-          loading: () => const Scaffold(
-            backgroundColor: Colors.black,
-            body: Center(
-              child: CircularProgressIndicator(color: Color(0xFF00E676)),
-            ),
-          ),
-          // ⚠️ Erro ao acessar o Firestore
-          error: (e, _) => Scaffold(
-            backgroundColor: Colors.black,
-            body: Center(
-              child: Text(
-                "Erro ao carregar perfil: $e",
-                style: const TextStyle(color: Colors.white70),
-              ),
-            ),
-          ),
         );
       },
-      // ⏳ Enquanto o Firebase Auth está inicializando
-      loading: () => const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
-      ),
-      // ⚠️ Erro na autenticação
-      error: (e, _) => Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: Text("Erro de Autenticação: $e", style: const TextStyle(color: Colors.redAccent)),
-        ),
-      ),
+      loading: () => const Scaffold(backgroundColor: Colors.black, body: Center(child: CircularProgressIndicator(color: Color(0xFF00E676)))),
+      error: (e, _) => Scaffold(backgroundColor: Colors.black, body: Center(child: Text("Erro: $e", style: const TextStyle(color: Colors.redAccent)))),
     );
   }
 }

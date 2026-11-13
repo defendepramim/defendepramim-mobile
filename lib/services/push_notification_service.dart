@@ -7,7 +7,7 @@ import 'package:defendepramim/ui/screens/home_goleiro.dart';
 import 'package:defendepramim/ui/screens/home_contratante.dart';
 
 class PushNotificationService {
-  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+  static final GlobalKey< NavigatorState > navigatorKey = GlobalKey< NavigatorState >();
   
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
 
@@ -15,7 +15,7 @@ class PushNotificationService {
   static bool _initialMessageProcessada = false;
   static bool _processandoNavegacao = false;
 
-  Future<void> inicializar() async {
+  Future< void > inicializar() async {
     NotificationSettings settings = await _fcm.requestPermission(
       alert: true,
       badge: true,
@@ -26,7 +26,7 @@ class PushNotificationService {
       debugPrint('🔔 Permissão para notificações concedida!');
 
       String? token = await _fcm.getToken();
-      debugPrint("📱 FCM Token: $token");
+      // 🚀 MUDANÇA: debugPrint do Token FCM removido por segurança (Etapa 1 concluída)
 
       if (token != null) {
         await _salvarTokenNoBanco(token);
@@ -60,14 +60,14 @@ class PushNotificationService {
     }
   }
 
-  Future<void> _tratarNavegacao(RemoteMessage message) async {
+  Future< void > _tratarNavegacao(RemoteMessage message) async {
     if (_processandoNavegacao) return; 
     _processandoNavegacao = true;
 
     final tipo = message.data['tipo'];
     final idJogo = message.data['idJogo'];
 
-    debugPrint("🎯 Notificação clicada -> Tipo: $tipo | idJogo: $idJogo");
+    debugPrint("🎯 Notificação clicada -> Tipo: \(tipo | idJogo:\)idJogo");
 
     if (tipo == 'chat_jogo') {
       if (idJogo == null) {
@@ -131,7 +131,7 @@ class PushNotificationService {
     _processandoNavegacao = false;
   }
 
-  Future<void> _salvarTokenNoBanco(String token) async {
+  Future< void > _salvarTokenNoBanco(String token) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     
     if (uid != null) {

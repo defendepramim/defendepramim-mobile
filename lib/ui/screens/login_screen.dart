@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; 
 import 'package:flutter/services.dart';
 import '../widgets/campo_input.dart';
 
@@ -8,10 +7,10 @@ class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State< LoginScreen > createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends State< LoginScreen > {
   final _emailController = TextEditingController();
   final _senhaController = TextEditingController();
   
@@ -37,8 +36,8 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// 🛡️ LÓGICA: RECUPERAR SENHA
-  Future<void> _recuperarSenha() async {
+  /// 🛡️ LÓGICA: RECUPERAR SENHA (BLINDADA)
+  Future< void > _recuperarSenha() async {
     final email = _emailController.text.trim().toLowerCase();
     if (email.isEmpty) {
       _mostrarMensagem("Digite seu e-mail para receber o link de recuperação.");
@@ -49,30 +48,17 @@ class _LoginScreenState extends State<LoginScreen> {
     FocusManager.instance.primaryFocus?.unfocus(); 
 
     try {
-      final userQuery = await FirebaseFirestore.instance
-          .collection('usuarios')
-          .where('email', isEqualTo: email)
-          .limit(1)
-          .get();
-
-      if (userQuery.docs.isEmpty) {
-        _mostrarMensagem("Este e-mail não está cadastrado no sistema.");
-        setState(() => _carregando = false);
-        return;
-      }
-
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-      _mostrarMensagem("Link enviado! Verifique sua caixa de entrada.", erro: false);
-      
+      _mostrarMensagem("Se o e-mail estiver cadastrado, enviaremos um link de recuperação.", erro: false);
     } catch (e) {
-      _mostrarMensagem("Erro ao processar solicitação. Tente novamente mais tarde.");
+      _mostrarMensagem("Se o e-mail estiver cadastrado, enviaremos um link de recuperação.", erro: false);
     } finally {
       if (mounted) setState(() => _carregando = false);
     }
   }
 
   /// 🔑 LÓGICA: LOGIN
-  Future<void> _fazerLogin() async {
+  Future< void > _fazerLogin() async {
     final email = _emailController.text.trim().toLowerCase();
     final senha = _senhaController.text.trim();
 
@@ -99,11 +85,13 @@ class _LoginScreenState extends State<LoginScreen> {
       String mensagem = "E-mail ou senha incorretos.";
       if (e.code == 'user-disabled') {
         mensagem = "Conta desativada.";
-      } else if (e.code == 'too-many-requests') {mensagem = "Muitas tentativas. Aguarde.";};
+      } else if (e.code == 'too-many-requests') {
+        mensagem = "Muitas tentativas. Aguarde.";
+      }
       
       _mostrarMensagem(mensagem);
     } catch (e) {
-      _mostrarMensagem("Erro inesperado.");
+      _mostrarMensagem("Erro inesperado ao tentar aceder.");
     } finally {
       if (mounted) setState(() => _carregando = false);
     }
@@ -112,9 +100,6 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     const primaryNeon = Color(0xFF00E676);
-    
-    // 🚀 MUDANÇA AQUI: Tamanho fixo para evitar recálculo de layout do MediaQuery 
-    // 180 é o equivalente a ~45% de uma tela padrão.
     const double logoSize = 180.0; 
     
     return Scaffold(
@@ -137,10 +122,9 @@ class _LoginScreenState extends State<LoginScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 28),
             child: Column(
               children: [
-                /// ⚽ LOGO HERO BLINDADA CONTRA LENTIDÃO
                 Hero(
                   tag: 'logo', 
-                  child: RepaintBoundary( // 🚀 MUDANÇA AQUI: Isola a pintura da logo
+                  child: RepaintBoundary( 
                     child: SizedBox(
                       height: logoSize, 
                       width: logoSize,
@@ -167,7 +151,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 
                 const SizedBox(height: 30),
 
-                /// EMAIL
                 CampoInput(
                   controller: _emailController,
                   label: "Seu e-mail",
@@ -178,7 +161,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 const SizedBox(height: 16),
 
-                /// SENHA
                 CampoInput(
                   controller: _senhaController,
                   label: "Sua senha",
@@ -195,7 +177,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
 
-                /// ESQUECI MINHA SENHA
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
@@ -209,7 +190,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 const SizedBox(height: 20),
 
-                /// BOTÃO LOGIN
                 SizedBox(
                   width: double.infinity,
                   height: 56,
@@ -237,7 +217,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
                 const SizedBox(height: 20),
 
-                /// CADASTRAR-SE
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [

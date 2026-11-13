@@ -3,25 +3,28 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart'; 
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:uuid/uuid.dart'; 
+
 import 'tela_selecao_tempo.dart';
 import 'package:defendepramim/ui/screens/mapa_seletor_page.dart';
+import 'package:defendepramim/core/dinheiro.dart';
 
 class TelaCriarJogo extends StatefulWidget {
-  final Map<String, dynamic>? dados;
+  final Map? dados;
   final VoidCallback? onFinalizado;
   
   const TelaCriarJogo({super.key, this.dados, this.onFinalizado});
 
   @override
-  State<TelaCriarJogo> createState() => _TelaCriarJogoState();
+  State createState() => _TelaCriarJogoState();
 }
 
 class _TelaCriarJogoState extends State<TelaCriarJogo> {
-  // --- ESTILO ---
   final Color primaryColor = const Color(0xFF00E676);
   final Color surfaceColor = const Color(0xFF121212);
 
-  // --- ESTADO DA PARTIDA ---
   DateTime? dataSelecionada;
   TimeOfDay? horarioSelecionado;
   int duracaoSelecionada = 60;
@@ -32,11 +35,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
   double valorJogo = 0.0;
   bool _processando = false;
 
-  // --- VARIÁVEIS DINÂMICAS DO FIREBASE ---
   bool _carregandoConfig = true;
   int _horasAntecedencia = 2;
   int _tempoDeslocamentoMin = 30; 
-
   double _precoVarzea = 35.0;
   double _precoInter = 36.0;
   double _precoElite = 38.0;
@@ -47,26 +48,25 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
   String nomeQuadraSalvar = "";
   String enderecoRuaSalvar = "";
+  /// busca_nome | mapa_pin — só busca_nome entra na fila de aprovação admin
+  String origemSelecaoQuadra = "mapa_pin";
 
   int _horasMultaCancelamento = 12;
   double _valorMulta = 10.0;
 
-  // 🟢 NOVAS VARIÁVEIS DE REQUISITO (MANTENDO SINCRONIA COM O ADMIN)
   int _reqExperientePartidas = 5;
   double _reqExperienteNota = 4.2;
   int _reqElitePartidas = 15;
   double _reqEliteNota = 4.5;
 
-  // --- TRAVAS DOS NÍVEIS (REATIVAS DO ADMIN) ---
   bool _nivelLivreAtivo = true;
   bool _nivelInterAtivo = false; 
   bool _nivelEliteAtivo = false;
-  StreamSubscription<DocumentSnapshot>? _configSubscription;
+  StreamSubscription? _configSubscription;
 
   final TextEditingController _cLoc = TextEditingController();
   final TextEditingController _cObs = TextEditingController();
 
-  // --- GETTERS DE VALIDAÇÃO ---
   bool get dataOk => dataSelecionada != null && horarioSelecionado != null;
   bool get localOk => localSelecionado.isNotEmpty && latitudeJogo != null && longitudeJogo != null;
   bool get quadraOk => tipoQuadra.isNotEmpty;
@@ -91,7 +91,6 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     super.dispose();
   }
 
-  // 🟢 ESCUTA EM TEMPO REAL
   void _escutarConfiguracoesGlobais() {
     _configSubscription = FirebaseFirestore.instance
         .collection('configuracoes')
@@ -109,25 +108,19 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           _taxaAppVarzea = (d['taxaAppVarzea'] ?? 5.0).toDouble();
           _taxaAppInter = (d['taxaAppInter'] ?? 6.0).toDouble();
           _taxaAppElite = (d['taxaAppElite'] ?? 8.0).toDouble();
-
           _horasMultaCancelamento = (d['horasMultaCancelamento'] ?? 12).toInt();
           _valorMulta = (d['valorMultaCancelamento'] ?? 10.0).toDouble();
-
           _nivelLivreAtivo = d['nivelLivreAtivo'] ?? true;
           _nivelInterAtivo = d['nivelInterAtivo'] ?? false;
           _nivelEliteAtivo = d['nivelEliteAtivo'] ?? false;
-
-          // Requisitos Dinâmicos Injetados!
           _reqExperientePartidas = (d['reqExperientePartidas'] ?? 5).toInt();
           _reqExperienteNota = (d['reqExperienteNota'] ?? 4.2).toDouble();
           _reqElitePartidas = (d['reqElitePartidas'] ?? 15).toInt();
           _reqEliteNota = (d['reqEliteNota'] ?? 4.5).toDouble();
-
           _carregandoConfig = false;
         });
       }
     }, onError: (e) {
-      debugPrint("Erro ao escutar configs globais: $e");
       if (mounted) setState(() => _carregandoConfig = false);
     });
   }
@@ -138,9 +131,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       barrierDismissible: false,
       builder: (ctx) {
       Future.delayed(const Duration(milliseconds: 1500), () {
-          // 🛡️ O ESCUDO: Verifica se o contexto deste dialog ainda existe!
           if (!ctx.mounted) { return; }
-
           if (Navigator.canPop(ctx)) {
             Navigator.pop(ctx);
             aoFinalizar();
@@ -153,7 +144,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             decoration: BoxDecoration(
               color: const Color(0xFF1E1E1E),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: primaryColor..withAlpha(13)),
+              border: Border.all(color: primaryColor.withAlpha(51)), 
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -202,7 +193,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     });
   }
 
-  Future<DateTime> _obterHoraCertaServidor() async {
+  Future _obterHoraCertaServidor() async {
     try {
       final docRef = FirebaseFirestore.instance.collection('temp_time').doc();
       await docRef.set({'hora': FieldValue.serverTimestamp()});
@@ -214,7 +205,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     }
   }
 
-  Future<String?> _verificarConflitoAgenda(DateTime inicioNovoJogo, int duracaoMinutos) async {
+  Future _verificarConflitoAgenda(DateTime inicioNovoJogo, int duracaoMinutos) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return null;
 
@@ -246,16 +237,16 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         String durFormat = duracaoExMinutos >= 60 ? "${(duracaoExMinutos / 60).toStringAsFixed(1)}h" : "$duracaoExMinutos min";
 
         if (tempoExtra > 0) {
-           return "Conflito! Você já tem convocação às $horaEx em '$localEx'. O sistema exige $_tempoDeslocamentoMin min de intervalo para deslocamento.";
+           return "Conflito! Você já tem convocação às \(horaEx em '\)localEx'. O sistema exige $_tempoDeslocamentoMin min de intervalo para deslocamento.";
         } else {
-           return "Conflito de agenda! Você já tem convocação às $horaEx (Duração: $durFormat).";
+           return "Conflito de agenda! Você já tem convocação às \(horaEx (Duração:\)durFormat).";
         }
       }
     }
     return null;
   }
 
-  Future<void> validarEProcessar() async {
+  Future validarEProcessar() async {
     setState(() => _processando = true);
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -263,21 +254,29 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       return;
     }
 
-    final userDoc = await FirebaseFirestore.instance.collection('usuarios').doc(uid).get();
-    double saldoEmConta = (userDoc.data()?['saldo'] ?? 0.0).toDouble();
+    // 🚀 LÊ O SALDO OFICIAL DA NOVA COLEÇÃO CARTEIRAS (EM CENTAVOS)
+    final carteiraDoc = await FirebaseFirestore.instance.collection('carteiras').doc(uid).get();
+    int saldoEmCentavos = (carteiraDoc.data()?['saldoCentavos'] ?? 0);
+    double saldoReal = Dinheiro.paraReal(saldoEmCentavos);
 
+    // Edição: só cobra a diferença positiva (upgrade).
+    // Downgrade (Elite→Livre) estorna no servidor — não bloqueia por "falta de saldo".
     double valorNecessario = valorJogo;
     if (widget.dados != null) {
-      double valorJaPago = (widget.dados!["valor"] ?? 0.0).toDouble();
+      final dynamic pagoC = widget.dados!["pagoEmCentavos"];
+      final double valorJaPago = pagoC is num
+          ? Dinheiro.paraReal(pagoC.round())
+          : (widget.dados!["valor"] as num?)?.toDouble() ?? 0.0;
       valorNecessario = valorJogo - valorJaPago;
     }
 
+    if (!mounted) return;
     setState(() => _processando = false);
 
-    if (saldoEmConta < valorNecessario && valorNecessario > 0) {
-      _modalRecargaRapida(saldoEmConta, valorNecessario);
+    if (saldoReal < valorNecessario && valorNecessario > 0) {
+      _modalRecargaRapida(saldoReal, valorNecessario);
     } else {
-      _abrirResumoFinal(saldoEmConta);
+      _abrirResumoFinal(saldoReal);
     }
   }
 
@@ -305,30 +304,30 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                   children: [
                     const SizedBox(height: 5),
                     _buildProgressBar(),
-                    const SizedBox(height: 16), // Espaçamento reduzido
+                    const SizedBox(height: 16),
 
-                    // 1. CABEÇA DA TELA ENXUTA
                     const Text(
                       "Quais são os detalhes da pelada?",
                       textAlign: TextAlign.left,
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, height: 1.1),
                     ),
-                    const SizedBox(height: 16), // Espaçamento reduzido
+                    const SizedBox(height: 16),
 
-                    // 2. MANTÉM OS DOIS PRIMEIROS CARDS INTEIROS
+                    // 🚀 CORREÇÃO DO BUG VISUAL: Adicionado o $ na interpolação das variáveis
                     _cardModuloMaster(
                       titulo: dataOk 
-    ? "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')} às ${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}" 
-    : "Data e Hora",
+                        ? "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')} às ${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}" 
+                        : "Data e Hora",
                       subtitulo: dataOk ? "${(duracaoSelecionada / 60).toStringAsFixed(0)}h de jogo" : "Quando e duração?",
                       icone: CupertinoIcons.calendar,
                       concluido: dataOk,
                       onTap: _abrirModuloTempo,
                     ),
 
+                    // 🚀 CORREÇÃO DO BUG VISUAL: Removida a string mal formatada que gerava os cartões com {resultado}
                     _cardModuloMaster(
-                      titulo: localOk ? localSelecionado : "Local",
-                      subtitulo: localOk ? (observacoes.isEmpty ? "Toque para alterar" : observacoes) : "Onde vai ser?",
+                      titulo: localOk ? localSelecionado.split(' (')[0] : "Local", // Exibe apenas o nome principal
+                      subtitulo: localOk ? observacoes.isEmpty ? localSelecionado : observacoes : "Onde vai ser?",
                       icone: CupertinoIcons.location_solid,
                       concluido: localOk,
                       onTap: () async {
@@ -337,6 +336,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                           MaterialPageRoute(builder: (context) => const MapaSeletorPage()), 
                         );
 
+                        if (!mounted) return;
                         if (resultado != null) {
                           setState(() {
                             nomeQuadraSalvar = resultado['nomeLocal'];
@@ -350,12 +350,12 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
                             latitudeJogo = resultado['lat'];
                             longitudeJogo = resultado['lng'];
+                            origemSelecaoQuadra = (resultado['origemSelecao'] ?? 'mapa_pin').toString();
                           });
                         }
                       },
                     ),
 
-                    // 3. A GRANDE MUDANÇA: LADO A LADO!
                     Row(
                       children: [
                         Expanded(
@@ -402,8 +402,8 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           borderRadius: BorderRadius.circular(10),
           child: LinearProgressIndicator(
             value: progresso,
-            backgroundColor: Colors.white..withAlpha(13),
-            valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+            backgroundColor: Colors.white.withAlpha(13), 
+            valueColor: AlwaysStoppedAnimation(primaryColor),
             minHeight: 4,
           ),
         ),
@@ -412,7 +412,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           alignment: Alignment.centerRight,
           child: Text(
             "${(progresso * 100).toInt()}% COMPLETO",
-            style: TextStyle(color: primaryColor..withAlpha(153), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+            style: TextStyle(color: primaryColor.withAlpha(153), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.5), 
           ),
         ),
       ],
@@ -426,7 +426,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.all(14), // Padding reduzido de 16 para 14
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             color: const Color(0xFF1E1E1E),
             borderRadius: BorderRadius.circular(16),
@@ -444,9 +444,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(titulo, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                    Text(titulo, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 2),
-                    Text(subtitulo, style: TextStyle(color: Colors.white.withAlpha(102), fontSize: 12)),
+                    Text(subtitulo, style: TextStyle(color: Colors.white.withAlpha(102), fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
@@ -458,7 +458,6 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
 
-  // Novo Card Menor para itens lado a lado
   Widget _cardMini({required String titulo, required IconData icone, required bool concluido, required VoidCallback onTap}) {
     return InkWell(
       onTap: onTap,
@@ -491,7 +490,6 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
   
-  // Função auxiliar para evitar que o texto do tipo de quadra quebre a linha no Card Mini
   String _resumirTextoQuadra(String quadra) {
     if(quadra.contains("Futsal")) return "Futsal";
     if(quadra.contains("Society")) return "Society";
@@ -506,7 +504,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1A),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withAlpha(13)),
+        border: Border.all(color: Colors.white.withAlpha(13)), 
       ),
       child: Row(
         children: [
@@ -514,20 +512,20 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("INVESTIMENTO", style: TextStyle(color: Colors.white..withAlpha(13), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                Text("INVESTIMENTO", style: TextStyle(color: Colors.white.withAlpha(128), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1)), 
                 const SizedBox(height: 4),
                 Text(tudoPronto ? "R\$ ${valorJogo.toStringAsFixed(2)}" : "---", style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
           SizedBox(
-            height: 50, // Aumentei um pouco a altura para ficar mais tocável
-            width: 140, // Mais espaço para a palavra CONTINUAR
+            height: 50,
+            width: 140,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: tudoPronto ? primaryColor : const Color(0xFF333333),
                 foregroundColor: Colors.black,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)), // Mais arredondado
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               onPressed: tudoPronto ? validarEProcessar : null,
               child: const Text("CONTINUAR", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)),
@@ -543,6 +541,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
 
     try {
       final DateTime agoraReal = await _obterHoraCertaServidor();
+      if (!mounted) return;
       setState(() => _processando = false);
 
       final res = await Navigator.push(
@@ -551,7 +550,6 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           builder: (context) => TelaSelecaoTempo(
             dataInicial: dataSelecionada, 
             horaInicial: horarioSelecionado,
-            
             validadorExterno: (dataHoraDesejada, duracaoMinutos) async {
               if (dataHoraDesejada.isBefore(agoraReal.add(Duration(hours: _horasAntecedencia)))) {
                 return "A convocação exige $_horasAntecedencia horas de antecedência mínima!";
@@ -568,6 +566,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         ),
       );
 
+      if (!mounted) return;
       if (res != null && res is DadosTempo) {
         setState(() {
           dataSelecionada = res.data;
@@ -582,6 +581,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
         });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _processando = false);
       _msgErro("Erro de sincronização. Verifique sua conexão e tente novamente.");
     }
@@ -670,10 +670,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                     },
             ),
 
-            // 🟢 TEXTO AGORA É DINÂMICO BASEADO NO BANCO DE DADOS
             _opcaoNivel(
               nome: "🛡️ Experiente",
-              subtitulo: "Requer $_reqExperientePartidas+ partidas e nota média ≥ ${_reqExperienteNota.toStringAsFixed(1)}★",
+              subtitulo: "Requer ${_reqExperientePartidas}+ partidas e nota média ≥ ${_reqExperienteNota.toStringAsFixed(1)}★",
               precoBase: _precoInter,
               bloqueado: !_nivelInterAtivo,
               onTap: !_nivelInterAtivo
@@ -688,10 +687,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                     },
             ),
 
-            // 🟢 TEXTO AGORA É DINÂMICO BASEADO NO BANCO DE DADOS
             _opcaoNivel(
               nome: "🥇 Elite / Paredão",
-              subtitulo: "Requer $_reqElitePartidas+ partidas e nota média ≥ ${_reqEliteNota.toStringAsFixed(1)}★",
+              subtitulo: "Requer ${_reqElitePartidas}+ partidas e nota média ≥ ${_reqEliteNota.toStringAsFixed(1)}★",
               precoBase: _precoElite,
               bloqueado: !_nivelEliteAtivo,
               onTap: !_nivelEliteAtivo
@@ -738,9 +736,9 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.amber.withOpacity(0.2),
+                color: Colors.amber.withAlpha(51),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Colors.amber..withAlpha(13), width: 0.8),
+                border: Border.all(color: Colors.amber.withAlpha(128), width: 0.8), 
               ),
               child: const Text(
                 "EM BREVE",
@@ -814,10 +812,10 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             const SizedBox(height: 20),
             TextField(
               controller: recargaController,
-              autofocus: true, // 🚀 Já abre o teclado direto!
+              autofocus: true, 
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textAlign: TextAlign.center, // 🚀 Centraliza o dinheiro
-              style: TextStyle(color: primaryColor, fontSize: 32, fontWeight: FontWeight.bold), // 🚀 Fonte gigante de Fintech
+              textAlign: TextAlign.center, 
+              style: TextStyle(color: primaryColor, fontSize: 32, fontWeight: FontWeight.bold), 
               decoration: InputDecoration(
                 prefixText: "R\$ ",
                 prefixStyle: const TextStyle(color: Colors.white54, fontSize: 20),
@@ -834,6 +832,7 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
             onPressed: () async {
+              // Recarga liberada para testes externos (Callable de teste; gateway PIX real entra depois)
               double valor = double.tryParse(recargaController.text.replaceAll(',', '.')) ?? 0;
               if (valor <= 0) return;
 
@@ -841,29 +840,28 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
               setState(() => _processando = true);
 
               try {
-                final uid = FirebaseAuth.instance.currentUser?.uid;
-                final userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-                final extratoRef = userRef.collection('extrato').doc();
+                int valorCentavos = Dinheiro.paraCentavos(valor);
+                String idempotencyKey = const Uuid().v4();
 
-                await FirebaseFirestore.instance.runTransaction((transaction) async {
-                  DocumentSnapshot snapshot = await transaction.get(userRef);
-                  double saldoAtualizado = (snapshot.data() as Map<String, dynamic>?)?['saldo']?.toDouble() ?? 0.0;
-
-                  transaction.update(userRef, {'saldo': saldoAtualizado + valor});
-                  transaction.set(extratoRef, {
-                    "id": extratoRef.id, "idUsuario": uid, "tipo": "entrada", "valor": valor,
-                    "saldoAnterior": saldoAtualizado, "saldoAtual": saldoAtualizado + valor,
-                    "descricao": widget.dados == null ? "Recarga via Convocação" : "Recarga para Edição",
-                    "categoria": "recarga", "data": FieldValue.serverTimestamp(),
-                  });
+                final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+                    .httpsCallable('recarregarCarteira');
+                await callable.call({
+                  'valorCentavos': valorCentavos,
+                  'idempotencyKey': idempotencyKey,
                 });
 
-                if (mounted) {
-                  setState(() => _processando = false);
-                  _showSuccessVisual("Saldo Adicionado!", () { validarEProcessar(); });
-                }
+                if (!mounted) return;
+                setState(() => _processando = false);
+                _showSuccessVisual("Saldo Adicionado!", () {
+                  validarEProcessar();
+                });
+              } on FirebaseFunctionsException catch (e) {
+                if (!mounted) return;
+                setState(() => _processando = false);
+                _msgErro(e.message ?? "Erro ao recarregar.");
               } catch (e) {
-                if (mounted) setState(() => _processando = false);
+                if (!mounted) return;
+                setState(() => _processando = false);
                 _msgErro("Erro ao recarregar: $e");
               }
             },
@@ -887,8 +885,12 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
           children: [
             const Text("CONFIRMAR CONVOCAÇÃO", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            _itemResumo(Icons.calendar_today, "Data/Hora", "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')} às ${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}"),
-            _itemResumo(Icons.place, "Local", localSelecionado),
+            _itemResumo(
+              Icons.calendar_today,
+              "Data/Hora",
+              "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')} às ${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}",
+            ),
+            _itemResumo(Icons.place, "Local", localSelecionado.split(' (')[0]),
             _itemResumo(Icons.grass, "Quadra", tipoQuadra),
             _itemResumo(Icons.bolt, "Nível", nivelGoleiro),
             const Divider(color: Colors.white12, height: 24),
@@ -896,12 +898,13 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text("Total a pagar:", style: TextStyle(color: Colors.grey, fontSize: 16)),
-                Text("R\$ ${valorJogo.toStringAsFixed(2)}", style: TextStyle(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold)),
+                Text(
+                  "R\$ ${valorJogo.toStringAsFixed(2)}",
+                  style: TextStyle(color: primaryColor, fontSize: 20, fontWeight: FontWeight.bold),
+                ),
               ],
             ),
-            
             const SizedBox(height: 16),
-            
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -916,9 +919,8 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
               ],
             ),
             
-            const SizedBox(height: 8), // Espaçamento entre os avisos
+            const SizedBox(height: 8), 
             
-            // --- AVISO 2: REGRA DO CONTRATO ASSINADO (Novo!) ---
             const Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -965,6 +967,8 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
     );
   }
 
+  /// Cria/edita jogo + cobrança ATÓMICA no servidor (criarEPagarJogo).
+  /// Cliente não grava jogo nem mexe em saldo.
   Future<void> salvarNoFirebase() async {
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -973,27 +977,27 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
       setState(() => _processando = true);
 
       final DateTime dataHoraInicio = DateTime(
-        dataSelecionada!.year, 
-        dataSelecionada!.month, 
-        dataSelecionada!.day, 
-        horarioSelecionado!.hour, 
-        horarioSelecionado!.minute
+        dataSelecionada!.year,
+        dataSelecionada!.month,
+        dataSelecionada!.day,
+        horarioSelecionado!.hour,
+        horarioSelecionado!.minute,
       );
       final DateTime dataHoraFim = dataHoraInicio.add(Duration(minutes: duracaoSelecionada));
 
-      String nomeFinalQuadra = nomeQuadraSalvar.isNotEmpty 
-          ? nomeQuadraSalvar 
-          : localSelecionado.split('(')[0].trim();
-          
-      String enderecoFinalQuadra = enderecoRuaSalvar.isNotEmpty 
-          ? enderecoRuaSalvar 
-          : (localSelecionado.contains('(') ? localSelecionado.split('(')[1].replaceAll(')', '').trim() : '');
-      
-      String nomeBuscaQuadra = nomeFinalQuadra.toLowerCase().trim();
-      String enderecoBuscaQuadra = enderecoFinalQuadra.toLowerCase().trim();
+      final String nomeFinalQuadra =
+          nomeQuadraSalvar.isNotEmpty ? nomeQuadraSalvar : localSelecionado.split('(')[0].trim();
+      final String enderecoFinalQuadra = enderecoRuaSalvar.isNotEmpty
+          ? enderecoRuaSalvar
+          : (localSelecionado.contains('(')
+              ? localSelecionado.split('(')[1].replaceAll(')', '').trim()
+              : '');
+      final String nomeBuscaQuadra = nomeFinalQuadra.toLowerCase().trim();
+      final String enderecoBuscaQuadra = enderecoFinalQuadra.toLowerCase().trim();
 
-      String? idQuadraVinculada = widget.dados?["idQuadra"];
+      String? idQuadraVinculada = widget.dados?["idQuadra"]?.toString();
 
+      // Resolução de quadra (não-financeiro) — pode ficar no cliente
       if (idQuadraVinculada == null) {
         try {
           if (nomeBuscaQuadra.isNotEmpty) {
@@ -1002,22 +1006,19 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
                 .where('nomeBusca', isEqualTo: nomeBuscaQuadra)
                 .limit(1)
                 .get();
-
             if (snapNome.docs.isNotEmpty) {
               idQuadraVinculada = snapNome.docs.first.id;
             }
           }
-
           if (idQuadraVinculada == null && latitudeJogo != null && longitudeJogo != null) {
             final snapCoords = await FirebaseFirestore.instance
                 .collection('quadras')
                 .where('latitude', isGreaterThanOrEqualTo: latitudeJogo! - 0.0005)
                 .where('latitude', isLessThanOrEqualTo: latitudeJogo! + 0.0005)
                 .get();
-
-            for (var docQ in snapCoords.docs) {
+            for (final docQ in snapCoords.docs) {
               final dQ = docQ.data();
-              double? lngQ = dQ['longitude']?.toDouble();
+              final lngQ = (dQ['longitude'] as num?)?.toDouble();
               if (lngQ != null && (lngQ - longitudeJogo!).abs() <= 0.0005) {
                 idQuadraVinculada = docQ.id;
                 break;
@@ -1025,144 +1026,123 @@ class _TelaCriarJogoState extends State<TelaCriarJogo> {
             }
           }
         } catch (e) {
-          debugPrint("Aviso na checagem de quadras duplicadas: $e");
+          debugPrint("Aviso ao resolver quadra: $e");
         }
       }
 
-      final DocumentReference userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-      final DocumentReference jogoRef = widget.dados != null 
-          ? FirebaseFirestore.instance.collection("jogos").doc(widget.dados!["id"]) 
-          : FirebaseFirestore.instance.collection("jogos").doc();
-          
-      final DocumentReference extratoRef = userRef.collection('extrato').doc();
-      
-      final DocumentReference? novaQuadraRef = (widget.dados == null && idQuadraVinculada == null) 
-          ? FirebaseFirestore.instance.collection('quadras').doc() 
-          : null;
-
-      if (novaQuadraRef != null) {
-        idQuadraVinculada = novaQuadraRef.id;
-      }
-
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        DocumentSnapshot userSnap = await transaction.get(userRef);
-        final dadosUsuario = userSnap.data() as Map<String, dynamic>?;
-        
-        double saldoAtualServidor = dadosUsuario?['saldo']?.toDouble() ?? 0.0;
-        String nomeContratanteLogado = dadosUsuario?['nome'] ?? "Contratante";
-
-        double valorAntigo = (widget.dados?["valor"] ?? 0.0).toDouble();
-        double diferencaSaldo = widget.dados == null ? -valorJogo : valorAntigo - valorJogo;
-        double saldoDepois = saldoAtualServidor + diferencaSaldo;
-
-        if (saldoDepois < 0) throw Exception("Saldo insuficiente verificado no servidor.");
-
-        String descricaoExtrato = "";
-        if (widget.dados == null) {
-          descricaoExtrato = "Convocação: $localSelecionado";
-        } else {
-          if (diferencaSaldo > 0) {
-            descricaoExtrato = "Estorno (Edição): $localSelecionado";
-          // ignore: curly_braces_in_flow_control_structures
-          } else if (diferencaSaldo < 0) descricaoExtrato = "Diferença (Edição): $localSelecionado";
-          // ignore: curly_braces_in_flow_control_structures
-          else descricaoExtrato = "Ajuste de detalhes: $localSelecionado";
+      // Nova quadra sugerida (não-financeiro)
+      // Regras:
+      // 1) Se já existe aprovada com mesmo nomeBusca → reutiliza, não cria pendente
+      // 2) Só cria pendente se origem foi busca por nome (não pin/endereço no mapa)
+      if (widget.dados == null && idQuadraVinculada == null && latitudeJogo != null && longitudeJogo != null) {
+        // Já aprovada com mesmo nome?
+        if (nomeBuscaQuadra.isNotEmpty) {
+          try {
+            final jaAprovada = await FirebaseFirestore.instance
+                .collection('quadras')
+                .where('aprovada', isEqualTo: true)
+                .where('nomeBusca', isEqualTo: nomeBuscaQuadra)
+                .limit(1)
+                .get();
+            if (jaAprovada.docs.isNotEmpty) {
+              idQuadraVinculada = jaAprovada.docs.first.id;
+            }
+          } catch (e) {
+            debugPrint("Aviso ao checar quadra aprovada: $e");
+          }
         }
 
-        transaction.update(userRef, {"saldo": saldoDepois});
-
-        if (diferencaSaldo != 0) {
-          transaction.set(extratoRef, {
-            "id": extratoRef.id, 
-            "idUsuario": uid, 
-            "idReferencia": jogoRef.id, 
-            "tipo": diferencaSaldo > 0 ? "entrada" : "saida",
-            "valor": diferencaSaldo.abs(), 
-            "saldoAnterior": saldoAtualServidor, 
-            "saldoAtual": saldoDepois,
-            "descricao": descricaoExtrato, 
-            "categoria": "jogo", 
-            "data": FieldValue.serverTimestamp(),
-          });
-        }
-
-        double taxaBaseFixa = nivelGoleiro.contains("Elite") 
-            ? _taxaAppElite 
-            : nivelGoleiro.contains("Inter") 
-                ? _taxaAppInter 
-                : _taxaAppVarzea;
-                
-        double horasJogadas = duracaoSelecionada / 60;
-        double comissaoTotalDesseJogo = taxaBaseFixa * horasJogadas;
-        double liquidoDoGoleiro = valorJogo - comissaoTotalDesseJogo;
-
-        transaction.set(
-            jogoRef,
-            {
-              "id": jogoRef.id, 
-              "idQuadra": idQuadraVinculada, 
-              "local": localSelecionado, 
-              "dataHora": Timestamp.fromDate(dataHoraInicio), 
-              "dataHoraFim": Timestamp.fromDate(dataHoraFim),
-              "dataExibicao": "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')}",
-              "horaExibicao": "${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}",
-              "valor": valorJogo, 
-              "status": widget.dados?["status"] ?? "aberto", 
-              "idContratante": uid, 
-              "nomeContratante": nomeContratanteLogado,
-              "observacoes": observacoes, 
-              "nivelGoleiro": nivelGoleiro, 
-              "tipoQuadra": tipoQuadra, 
-              "duracao": duracaoSelecionada,
-              "criadoEm": widget.dados?["criadoEm"] ?? FieldValue.serverTimestamp(), 
-              "editadoEm": FieldValue.serverTimestamp(),
-              
-              "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
-              "latitude": latitudeJogo, 
-              "longitude": longitudeJogo,
-              
-              "taxaAplicada": comissaoTotalDesseJogo,      
-              "valorGoleiro": liquidoDoGoleiro,            
-            },
-            SetOptions(merge: true));
-
-        if (novaQuadraRef != null) { 
-          transaction.set(novaQuadraRef, {
+        // Só fila admin se veio da busca por nome
+        if (idQuadraVinculada == null && origemSelecaoQuadra == 'busca_nome') {
+          final novaQuadraRef = FirebaseFirestore.instance.collection('quadras').doc();
+          idQuadraVinculada = novaQuadraRef.id;
+          await novaQuadraRef.set({
             "id": novaQuadraRef.id,
-            "nome": nomeFinalQuadra,      
-            "endereco": enderecoFinalQuadra,  
-            "nomeBusca": nomeBuscaQuadra,       
-            "enderecoBusca": enderecoBuscaQuadra, 
+            "nome": nomeFinalQuadra,
+            "endereco": enderecoFinalQuadra,
+            "nomeBusca": nomeBuscaQuadra,
+            "enderecoBusca": enderecoBuscaQuadra,
             "observacoes": observacoes,
             "tipoQuadra": tipoQuadra,
-            
-            "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!), 
+            "localizacao": GeoPoint(latitudeJogo!, longitudeJogo!),
             "latitude": latitudeJogo,
             "longitude": longitudeJogo,
-            
-            "aprovada": false, 
+            "aprovada": false,
+            "origemSelecao": "busca_nome",
             "sugeridaPor": uid,
             "criadaEm": FieldValue.serverTimestamp(),
           });
         }
+      }
+
+      final double taxaBaseFixa = nivelGoleiro.contains("Elite")
+          ? _taxaAppElite
+          : nivelGoleiro.contains("Inter")
+              ? _taxaAppInter
+              : _taxaAppVarzea;
+      final double horasJogadas = duracaoSelecionada / 60;
+      final double comissaoTotalDesseJogo = taxaBaseFixa * horasJogadas;
+      final double liquidoDoGoleiro = valorJogo - comissaoTotalDesseJogo;
+
+      final String dataExibicao =
+          "${dataSelecionada!.day.toString().padLeft(2, '0')}/${dataSelecionada!.month.toString().padLeft(2, '0')}";
+      final String horaExibicao =
+          "${horarioSelecionado!.hour.toString().padLeft(2, '0')}:${horarioSelecionado!.minute.toString().padLeft(2, '0')}";
+
+      final String? idJogoExistente = widget.dados?["id"]?.toString();
+      final String idempotencyKey = const Uuid().v4();
+
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('criarEPagarJogo');
+
+      await callable.call({
+        'idempotencyKey': idempotencyKey,
+        if (idJogoExistente != null) 'idJogo': idJogoExistente,
+        'jogo': {
+          'local': localSelecionado,
+          'valor': valorJogo,
+          'nivelGoleiro': nivelGoleiro,
+          'tipoQuadra': tipoQuadra,
+          'duracao': duracaoSelecionada,
+          'observacoes': observacoes,
+          // Epoch ms = fuso-agnóstico (evita o servidor UTC interpretar ISO local como UTC)
+          'dataHoraMs': dataHoraInicio.millisecondsSinceEpoch,
+          'dataHoraFimMs': dataHoraFim.millisecondsSinceEpoch,
+          'dataHora': dataHoraInicio.toUtc().toIso8601String(),
+          'dataHoraFim': dataHoraFim.toUtc().toIso8601String(),
+          'dataExibicao': dataExibicao,
+          'horaExibicao': horaExibicao,
+          'latitude': latitudeJogo,
+          'longitude': longitudeJogo,
+          'idQuadra': idQuadraVinculada,
+          'taxaAplicada': comissaoTotalDesseJogo,
+          'valorGoleiro': liquidoDoGoleiro,
+          'taxaAplicadaCentavos': Dinheiro.paraCentavos(comissaoTotalDesseJogo),
+          'valorGoleiroCentavos': Dinheiro.paraCentavos(liquidoDoGoleiro),
+        },
       });
 
-      if (mounted) {
-        _showSuccessVisual(widget.dados != null ? "Atualizado!" : "Publicado!", () {
-          if (widget.onFinalizado != null) {
-            widget.onFinalizado!();
-          } else {
-            Navigator.pop(context);
-          }
-        });
-      }
+      if (!mounted) return;
+      _showSuccessVisual(widget.dados != null ? "Atualizado!" : "Publicado!", () {
+        if (widget.onFinalizado != null) {
+          widget.onFinalizado!();
+        } else {
+          if (mounted) Navigator.pop(context);
+        }
+      });
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      setState(() => _processando = false);
+      _msgErro(e.message ?? "Erro ao salvar jogo.");
     } catch (e) {
-      if (mounted) setState(() => _processando = false);
+      if (!mounted) return;
+      setState(() => _processando = false);
       _msgErro("Erro ao salvar: $e");
     }
   }
 
   void _msgErro(String m) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Colors.redAccent));
   }
 }

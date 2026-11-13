@@ -707,13 +707,21 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
           final chavePix = dados['chavePix']?.toString() ?? "";
           final tipoPix = dados['tipoPix']?.toString() ?? "";
           
-          final totalGastos = (dados['totalGastos'] ?? 0.0).toDouble();
+          // Preferir centavos (oficial); fallback legado em reais
+          final int totalGastosCentavos =
+              (dados['totalGastosCentavos'] as num?)?.round() ?? 0;
+          final double totalGastos = totalGastosCentavos > 0
+              ? totalGastosCentavos / 100.0
+              : (dados['totalGastos'] as num?)?.toDouble() ?? 0.0;
           final partidasOrganizadas = dados['partidasOrganizadas'] ?? 0;
           final cancelamentos = dados['cancelamentos'] ?? 0;
 
-          int soma = dados['somaAvaliacoes'] ?? 0;
-          int total = dados['totalAvaliacoes'] ?? 0;
-          double media = total > 0 ? soma / total : 0.0;
+          // Avaliações RECEBIDAS dos goleiros — não as que o contratante deu aos goleiros
+          final double soma = (dados['somaAvaliacoes'] as num?)?.toDouble() ??
+              (dados['somaNotasAvaliacoes'] as num?)?.toDouble() ??
+              0.0;
+          final int total = (dados['totalAvaliacoes'] as num?)?.toInt() ?? 0;
+          final double media = total > 0 ? soma / total : 0.0;
 
           final saldoAviso = (dados['saldo'] ?? 0.0).toDouble() - (dados['multasPendentes'] ?? 0.0).toDouble();
 
@@ -762,7 +770,7 @@ class _AbaPerfilContratanteState extends State<AbaPerfilContratante> {
                                 const SizedBox(width: 8),
                                 Container(width: 4, height: 4, decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle)),
                                 const SizedBox(width: 8),
-                                Text("$total avaliações", style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                                Text(total > 0 ? "$total avaliações" : "sem avaliações ainda", style: const TextStyle(color: Colors.white38, fontSize: 11)),
                               ],
                             ),
                           ],

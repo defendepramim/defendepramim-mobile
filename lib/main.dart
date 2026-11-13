@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
+// 🚀 MUDANÇA: Import do Crashlytics
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:flutter/foundation.dart'; // Para o PlatformDispatcher
+
 import 'core/app.dart';
 
 void main() async {
@@ -24,12 +28,19 @@ void main() async {
   try {
     await Firebase.initializeApp();
     firebaseOk = true;
-    debugPrint("Firebase OK!");
+    
+    // 🚀 MUDANÇA: Inicialização do Crashlytics (Item 1 - Etapa 1)
+    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      return true;
+    };
+    
+    debugPrint("Firebase e Crashlytics OK!");
   } catch (e) {
     debugPrint("🚨 Erro fatal no Firebase: $e");
   }
 
-  // 🟢 Se o Firebase falhar, exibe uma tela limpa de erro em vez de dar crash fatal
   if (!firebaseOk) {
     runApp(
       const MaterialApp(
@@ -55,7 +66,6 @@ void main() async {
   );
 }
 
-/// 🔑 WRAPPER CIRÚRGICO: Fecha o teclado ao tocar em qualquer lugar vazio do app
 class GlobalKeyboardDismiss extends StatelessWidget {
   final Widget child;
   const GlobalKeyboardDismiss({super.key, required this.child});
@@ -63,7 +73,6 @@ class GlobalKeyboardDismiss extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      // 🟢 Permite capturar toques mesmo em áreas vazias e transparentes
       behavior: HitTestBehavior.translucent,
       onTap: () {
         FocusScopeNode currentFocus = FocusScope.of(context);

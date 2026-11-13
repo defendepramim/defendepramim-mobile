@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 import 'package:defendepramim/services/push_notification_service.dart';
 import 'package:defendepramim/ui/widgets/card_agenda_goleiro.dart';
 import 'package:defendepramim/ui/widgets/card_historico_goleiro.dart';
@@ -232,82 +234,57 @@ Future<void> _sincronizarRelogio() async {
     );
   }
 
+  /// Defesa = recusar contestação no servidor (sem mexer em dinheiro no cliente)
   Future<void> _executarDefesa(String idJogo, String texto) async {
     setState(() => _isLoading = true);
     try {
-      await FirebaseFirestore.instance.collection('jogos').doc(idJogo).update({
-        'contestacao.statusMediacao': 'em_analise_suporte',
-        'contestacao.respostaGoleiro': texto,
-        'contestacao.respondidoEm': FieldValue.serverTimestamp(),
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('processarContestacao');
+
+      await callable.call({
+        'idJogo': idJogo,
+        'acao': 'recusar',
+        'respostaTexto': texto,
+        'idempotencyKey': const Uuid().v4(),
       });
+
       _showSnackBar("Defesa enviada com sucesso!", cor: Colors.green);
+    } on FirebaseFunctionsException catch (e) {
+      _showSnackBar(e.message ?? "Erro ao enviar defesa.", cor: Colors.red);
     } catch (e) {
       _showSnackBar("Erro ao enviar defesa.");
+      debugPrint("Erro na defesa: $e");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-// ✨ NOVA LÓGICA FINANCEIRA BLINDADA POR TRANSACTION COM FALTAS
+  /// Aceitar contestação — estorno e falta só no servidor
   Future<void> _aceitarContestacao(String idJogo) async {
     setState(() => _isLoading = true);
-    
+
     try {
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        // 1. Buscar dados da partida
-        DocumentReference jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
-        DocumentSnapshot jogoSnap = await transaction.get(jogoRef);
-        
-        if (!jogoSnap.exists) return;
-        final dadosJogo = jogoSnap.data() as Map<String, dynamic>;
-        final double valorEstorno = (dadosJogo['valor'] ?? 0).toDouble();
-        final String idContratante = dadosJogo['idContratante'];
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('processarContestacao');
 
-        // ✨ A CORREÇÃO ESTÁ AQUI: Pegar o ID do goleiro para criar o goleiroRef
-        final String? idGoleiro = dadosJogo['idGoleiro'];
-        if (idGoleiro == null) return; // Segurança extra
-
-        DocumentReference goleiroRef = FirebaseFirestore.instance.collection('usuarios').doc(idGoleiro);
-        DocumentReference contratanteRef = FirebaseFirestore.instance.collection('usuarios').doc(idContratante);
-        DocumentReference extratoRef = contratanteRef.collection('extrato').doc();
-
-        // 2. Executar mutações no Jogo
-        transaction.update(jogoRef, {
-          'status': 'contestado_aceito',
-          'contestacao.statusMediacao': 'resolvido_goleiro_aceitou',
-          'contestacao.finalizadoEm': FieldValue.serverTimestamp(),
-        });
-
-        // 3. Devolver o dinheiro para o Contratante
-        transaction.update(contratanteRef, {
-          'saldo': FieldValue.increment(valorEstorno),
-        });
-
-        // ✨ 4. APLICAR A FALTA NO PERFIL DO GOLEIRO
-        transaction.update(goleiroRef, {
-          'faltas': FieldValue.increment(1),
-        });
-
-        // 5. Gerar extrato para o contratante
-        transaction.set(extratoRef, {
-          'id': extratoRef.id,
-          'idReferencia': idJogo,
-          'tipo': 'estorno_contestacao',
-          'valor': valorEstorno,
-          'descricao': 'Estorno: Contestação aceita pelo goleiro',
-          'data': FieldValue.serverTimestamp(),
-          'status': 'concluido',
-        });
+      await callable.call({
+        'idJogo': idJogo,
+        'acao': 'aceitar',
+        'idempotencyKey': const Uuid().v4(),
       });
 
-      _showSnackBar("Contestação aceita. O valor foi devolvido ao contratante.", cor: Colors.green);
+      _showSnackBar(
+        "Contestação aceita. O valor foi devolvido ao contratante.",
+        cor: Colors.green,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      _showSnackBar(e.message ?? "Erro ao processar estorno.", cor: Colors.red);
+      debugPrint("Erro na contestação: $e");
     } catch (e) {
       _showSnackBar("Erro ao processar estorno.");
       debugPrint("Erro na contestação: $e");
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -377,60 +354,62 @@ Future<void> _sincronizarRelogio() async {
     );
   }
 
-Future<void> _executarDesistencia(String idJogo, double multa, int horasRegraMulta, String localJogo) async {
+  /// Desistência — multa, falta e reabertura do jogo só no servidor.
+  /// O valor de multa no diálogo é só aviso de UI; o servidor recalcula.
+  Future<void> _executarDesistencia(
+    String idJogo,
+    double multaEstimadaUi,
+    int horasRegraMulta,
+    String localJogo,
+  ) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     setState(() => _isLoading = true);
 
     try {
-      // 1. Busca todas as mensagens antigas trocadas neste jogo para apagar
-      final mensagensSnap = await FirebaseFirestore.instance
-          .collection('jogos')
-          .doc(idJogo)
-          .collection('mensagens')
-          .get();
+      final callable = FirebaseFunctions.instanceFor(region: 'southamerica-east1')
+          .httpsCallable('processarDesistenciaGoleiro');
 
-      final batch = FirebaseFirestore.instance.batch();
-
-      // 🧹 LIMPEZA DO CHAT: Deleta o histórico antigo para o próximo goleiro não ler
-      for (var doc in mensagensSnap.docs) {
-        batch.delete(doc.reference);
-      }
-
-      // 2. Referência do Jogo (Volta a ficar disponível para outros)
-      final jogoRef = FirebaseFirestore.instance.collection('jogos').doc(idJogo);
-
-      batch.update(jogoRef, {
-        'status': 'aberto',
-        'idGoleiro': FieldValue.delete(),
-        'nomeGoleiro': FieldValue.delete(),
-        'desistentes': FieldValue.arrayUnion([uid]),
+      final result = await callable.call({
+        'idJogo': idJogo,
+        'idempotencyKey': const Uuid().v4(),
       });
 
-      final userRef = FirebaseFirestore.instance.collection('usuarios').doc(uid);
-
-      // 3. Registra a multa e a falta caso tenha desistido em cima da hora
-      if (multa > 0) {
-        final extratoRef = userRef.collection('extrato').doc();
-
-        batch.set(extratoRef, {
-          "id": extratoRef.id,
-          "idReferencia": idJogo,
-          "tipo": "multa_desistencia",
-          "valor": multa,
-          "descricao": "Multa: Desistência < ${horasRegraMulta}h\nLocal: ${localJogo.split('(')[0].trim()}",
-          "data": FieldValue.serverTimestamp(),
-          "status": "concluido",
-        });
-
-        batch.update(userRef, {
-          'multasPendentes': FieldValue.increment(multa),
-          'faltas': FieldValue.increment(1),
-        });
+      final data = result.data;
+      int multaCentavos = 0;
+      if (data is Map && data['multaCentavos'] != null) {
+        multaCentavos = (data['multaCentavos'] as num).round();
       }
 
-      await batch.commit(); 
-      _showSnackBar(multa > 0 ? "Desistência realizada. Multa e falta registradas." : "Desistência concluída.");
+      // Limpeza de chat (não-financeira) para o próximo goleiro não ver histórico antigo
+      try {
+        final mensagensSnap = await FirebaseFirestore.instance
+            .collection('jogos')
+            .doc(idJogo)
+            .collection('mensagens')
+            .get();
+        if (mensagensSnap.docs.isNotEmpty) {
+          final batch = FirebaseFirestore.instance.batch();
+          for (final doc in mensagensSnap.docs) {
+            batch.delete(doc.reference);
+          }
+          await batch.commit();
+        }
+      } catch (e) {
+        debugPrint("Aviso: falha ao limpar chat após desistência: $e");
+      }
+
+      if (multaCentavos > 0) {
+        _showSnackBar(
+          "Desistência realizada. Multa de R\$ ${(multaCentavos / 100).toStringAsFixed(2)} registrada.",
+          cor: Colors.orange,
+        );
+      } else {
+        _showSnackBar("Desistência concluída.", cor: Colors.green);
+      }
+    } on FirebaseFunctionsException catch (e) {
+      _showSnackBar(e.message ?? "Erro ao processar desistência.", cor: Colors.red);
+      debugPrint("Erro na desistência: $e");
     } catch (e) {
       _showSnackBar("Erro ao processar desistência.");
       debugPrint("Erro na desistência: $e");
